@@ -1,9 +1,11 @@
 package com.edoe.orchestrator.service;
 
 import com.edoe.orchestrator.entity.OutboxEvent;
+import com.edoe.orchestrator.entity.ProcessDefinition;
 import com.edoe.orchestrator.entity.ProcessInstance;
 import com.edoe.orchestrator.entity.ProcessStatus;
 import com.edoe.orchestrator.repository.OutboxEventRepository;
+import com.edoe.orchestrator.repository.ProcessDefinitionRepository;
 import com.edoe.orchestrator.repository.ProcessInstanceRepository;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import org.junit.jupiter.api.BeforeEach;
@@ -31,12 +33,22 @@ class TransitionServiceTest {
     @Mock
     private OutboxEventRepository outboxRepository;
 
+    @Mock
+    private ProcessDefinitionRepository definitionRepository;
+
     private TransitionService transitionService;
     private final ObjectMapper objectMapper = new ObjectMapper();
 
+    private static final String TRANSITIONS_JSON =
+            "{\"STEP_1_FINISHED\":\"STEP_2\",\"STEP_2_FINISHED\":\"COMPLETED\"}";
+
     @BeforeEach
     void setUp() {
-        transitionService = new TransitionService(repository, outboxRepository, objectMapper);
+        transitionService = new TransitionService(repository, outboxRepository, definitionRepository, objectMapper);
+    }
+
+    private ProcessDefinition definition(String name) {
+        return new ProcessDefinition(name, "STEP_1", TRANSITIONS_JSON);
     }
 
     private ProcessInstance instanceWithId(UUID id, String step, ProcessStatus status, String contextJson) throws Exception {
@@ -51,6 +63,7 @@ class TransitionServiceTest {
     @Test
     void startProcess_savesInstanceAndCreatesOutboxEvent() {
         UUID id = UUID.randomUUID();
+        when(definitionRepository.findByName("USER_REGISTRATION")).thenReturn(Optional.of(definition("USER_REGISTRATION")));
         when(repository.saveAndFlush(any())).thenAnswer(inv -> {
             ProcessInstance pi = inv.getArgument(0);
             try {
@@ -86,6 +99,7 @@ class TransitionServiceTest {
         ProcessInstance inst = instanceWithId(id, "STEP_1", ProcessStatus.RUNNING, "{\"userId\":\"user-42\"}");
         when(repository.findById(id)).thenReturn(Optional.of(inst));
         when(repository.saveAndFlush(any())).thenAnswer(inv -> inv.getArgument(0));
+        when(definitionRepository.findByName("TEST_FLOW")).thenReturn(Optional.of(definition("TEST_FLOW")));
 
         transitionService.handleEvent(id.toString(), "STEP_1_FINISHED", Map.of("result", "ok"));
 
@@ -105,6 +119,7 @@ class TransitionServiceTest {
         ProcessInstance inst = instanceWithId(id, "STEP_2", ProcessStatus.RUNNING, "{\"userId\":\"user-42\"}");
         when(repository.findById(id)).thenReturn(Optional.of(inst));
         when(repository.saveAndFlush(any())).thenAnswer(inv -> inv.getArgument(0));
+        when(definitionRepository.findByName("TEST_FLOW")).thenReturn(Optional.of(definition("TEST_FLOW")));
 
         transitionService.handleEvent(id.toString(), "STEP_2_FINISHED", Map.of("finalResult", "done"));
 
@@ -158,6 +173,7 @@ class TransitionServiceTest {
         ProcessInstance inst = instanceWithId(id, "STEP_1", ProcessStatus.RUNNING, "{\"userId\":\"user-42\"}");
         when(repository.findById(id)).thenReturn(Optional.of(inst));
         when(repository.saveAndFlush(any())).thenAnswer(inv -> inv.getArgument(0));
+        when(definitionRepository.findByName("TEST_FLOW")).thenReturn(Optional.of(definition("TEST_FLOW")));
 
         transitionService.handleEvent(id.toString(), "STEP_1_FINISHED", Map.of("result", "ok"));
 
@@ -166,5 +182,58 @@ class TransitionServiceTest {
         Map<String, Object> merged = objectMapper.readValue(mergedJson, Map.class);
         assertThat(merged).containsEntry("userId", "user-42");
         assertThat(merged).containsEntry("result", "ok");
+    }
+
+    // 8. startProcess uses definition's initialStep
+    @Test
+    void startProcess_usesDefinitionInitialStep() {
+        UUID id = UUID.randomUUID();
+        ProcessDefinition def = new ProcessDefinition("CUSTOM_FLOW", "INIT_STEP",
+                "{\"INIT_STEP_FINISHED\":\"COMPLETED\"}");
+        when(definitionRepository.findByName("CUSTOM_FLOW")).thenReturn(Optional.of(def));
+        when(repository.saveAndFlush(any())).thenAnswer(inv -> {
+            ProcessInstance pi = inv.getArgument(0);
+            try {
+                Field f = ProcessInstance.class.getDeclaredField("id");
+                f.setAccessible(true);
+                f.set(pi, id);
+            } catch (Exception e) { throw new RuntimeException(e); }
+            return pi;
+        });
+
+        transitionService.startProcess("CUSTOM_FLOW", Map.of());
+
+        ArgumentCaptor<ProcessInstance> captor = ArgumentCaptor.forClass(ProcessInstance.class);
+        verify(repository).saveAndFlush(captor.capture());
+        assertThat(captor.getValue().getCurrentStep()).isEqualTo("INIT_STEP");
+
+        ArgumentCaptor<OutboxEvent> outboxCaptor = ArgumentCaptor.forClass(OutboxEvent.class);
+        verify(outboxRepository).save(outboxCaptor.capture());
+        assertThat(outboxCaptor.getValue().getEventType()).isEqualTo("INIT_STEP");
+    }
+
+    // 9. startProcess throws when definition not found
+    @Test
+    void startProcess_throwsWhenDefinitionNotFound() {
+        when(definitionRepository.findByName("MISSING")).thenReturn(Optional.empty());
+
+        assertThatThrownBy(() -> transitionService.startProcess("MISSING", Map.of()))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("MISSING");
+    }
+
+    // 10. handleEvent on last step sets completedAt
+    @Test
+    void handleEvent_completedProcess_setsCompletedAt() throws Exception {
+        UUID id = UUID.randomUUID();
+        ProcessInstance inst = instanceWithId(id, "STEP_2", ProcessStatus.RUNNING, "{}");
+        when(repository.findById(id)).thenReturn(Optional.of(inst));
+        when(repository.saveAndFlush(any())).thenAnswer(inv -> inv.getArgument(0));
+        when(definitionRepository.findByName("TEST_FLOW")).thenReturn(Optional.of(definition("TEST_FLOW")));
+
+        transitionService.handleEvent(id.toString(), "STEP_2_FINISHED", Map.of());
+
+        assertThat(inst.getCompletedAt()).isNotNull();
+        assertThat(inst.getStatus()).isEqualTo(ProcessStatus.COMPLETED);
     }
 }

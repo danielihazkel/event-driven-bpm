@@ -1,9 +1,11 @@
 package com.edoe.orchestrator.service;
 
 import com.edoe.orchestrator.entity.OutboxEvent;
+import com.edoe.orchestrator.entity.ProcessDefinition;
 import com.edoe.orchestrator.entity.ProcessInstance;
 import com.edoe.orchestrator.entity.ProcessStatus;
 import com.edoe.orchestrator.repository.OutboxEventRepository;
+import com.edoe.orchestrator.repository.ProcessDefinitionRepository;
 import com.edoe.orchestrator.repository.ProcessInstanceRepository;
 import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.core.type.TypeReference;
@@ -22,34 +24,34 @@ import java.util.UUID;
 public class TransitionService {
 
     private static final Logger log = LoggerFactory.getLogger(TransitionService.class);
-
-    private static final String INITIAL_STEP = "STEP_1";
     private static final String COMPLETED_SENTINEL = "COMPLETED";
-
-    private static final Map<String, String> TRANSITIONS = Map.of(
-            "STEP_1_FINISHED", "STEP_2",
-            "STEP_2_FINISHED", "COMPLETED"
-    );
 
     private final ProcessInstanceRepository repository;
     private final OutboxEventRepository outboxRepository;
+    private final ProcessDefinitionRepository definitionRepository;
     private final ObjectMapper objectMapper;
 
     public TransitionService(ProcessInstanceRepository repository,
                              OutboxEventRepository outboxRepository,
+                             ProcessDefinitionRepository definitionRepository,
                              ObjectMapper objectMapper) {
         this.repository = repository;
         this.outboxRepository = outboxRepository;
+        this.definitionRepository = definitionRepository;
         this.objectMapper = objectMapper;
     }
 
     @Transactional
     public UUID startProcess(String definitionName, Map<String, Object> initialData) {
+        ProcessDefinition definition = definitionRepository.findByName(definitionName)
+                .orElseThrow(() -> new IllegalArgumentException("Unknown definition: " + definitionName));
+
         Map<String, Object> data = initialData != null ? initialData : Map.of();
         String contextJson = serializeContext(data);
-        ProcessInstance instance = new ProcessInstance(definitionName, INITIAL_STEP, contextJson, ProcessStatus.RUNNING);
+        String initialStep = definition.getInitialStep();
+        ProcessInstance instance = new ProcessInstance(definitionName, initialStep, contextJson, ProcessStatus.RUNNING);
         repository.saveAndFlush(instance);
-        outboxRepository.save(new OutboxEvent(instance.getId().toString(), INITIAL_STEP, contextJson));
+        outboxRepository.save(new OutboxEvent(instance.getId().toString(), initialStep, contextJson));
         log.debug("Started process {} id={}", definitionName, instance.getId());
         return instance.getId();
     }
@@ -67,14 +69,19 @@ public class TransitionService {
             return;
         }
 
+        ProcessDefinition definition = definitionRepository.findByName(instance.getDefinitionName())
+                .orElseThrow(() -> new IllegalArgumentException("Unknown definition: " + instance.getDefinitionName()));
+
+        Map<String, String> transitions = deserializeTransitions(definition.getTransitionsJson());
         Map<String, Object> mergedData = mergeContext(instance.getContextData(), outputData);
         instance.setContextData(serializeContext(mergedData));
 
-        String nextStep = TRANSITIONS.getOrDefault(eventType, COMPLETED_SENTINEL);
+        String nextStep = transitions.getOrDefault(eventType, COMPLETED_SENTINEL);
 
         if (COMPLETED_SENTINEL.equals(nextStep)) {
             instance.setCurrentStep(COMPLETED_SENTINEL);
             instance.setStatus(ProcessStatus.COMPLETED);
+            instance.setCompletedAt(LocalDateTime.now());
             repository.saveAndFlush(instance);
             log.debug("Process {} completed", processId);
         } else {
@@ -83,6 +90,14 @@ public class TransitionService {
             repository.saveAndFlush(instance);
             outboxRepository.save(new OutboxEvent(processId, nextStep, serializeContext(mergedData)));
             log.debug("Process {} transitioned to step {}", processId, nextStep);
+        }
+    }
+
+    private Map<String, String> deserializeTransitions(String transitionsJson) {
+        try {
+            return objectMapper.readValue(transitionsJson, new TypeReference<Map<String, String>>() {});
+        } catch (JsonProcessingException e) {
+            throw new RuntimeException("Failed to parse transitions JSON", e);
         }
     }
 

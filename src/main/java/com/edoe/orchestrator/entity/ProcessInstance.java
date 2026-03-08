@@ -31,6 +31,9 @@ public class ProcessInstance {
     @Column(name = "step_started_at", nullable = false)
     private LocalDateTime stepStartedAt;
 
+    @Column(name = "completed_at")
+    private LocalDateTime completedAt;
+
     protected ProcessInstance() {}
 
     public ProcessInstance(String definitionName, String currentStep, String contextData, ProcessStatus status) {
@@ -49,9 +52,11 @@ public class ProcessInstance {
     public ProcessStatus getStatus() { return status; }
     public LocalDateTime getCreatedAt() { return createdAt; }
     public LocalDateTime getStepStartedAt() { return stepStartedAt; }
+    public LocalDateTime getCompletedAt() { return completedAt; }
 
     public void setCurrentStep(String currentStep) { this.currentStep = currentStep; }
     public void setContextData(String contextData) { this.contextData = contextData; }
     public void setStatus(ProcessStatus status) { this.status = status; }
     public void setStepStartedAt(LocalDateTime stepStartedAt) { this.stepStartedAt = stepStartedAt; }
+    public void setCompletedAt(LocalDateTime completedAt) { this.completedAt = completedAt; }
 }

@@ -16,6 +16,7 @@ import org.springframework.test.context.TestPropertySource;
         "spring.datasource.username=sa",
         "spring.datasource.password=",
         "spring.jpa.database-platform=org.hibernate.dialect.H2Dialect",
+        "spring.jpa.properties.hibernate.dialect=org.hibernate.dialect.H2Dialect",
         "spring.kafka.bootstrap-servers=localhost:9999"
 })
 public class OrchestratorApplicationTests {
