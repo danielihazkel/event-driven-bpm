@@ -1,0 +1,41 @@
+package com.edoe.orchestrator.service;
+
+import com.edoe.orchestrator.entity.ProcessInstance;
+import com.edoe.orchestrator.entity.ProcessStatus;
+import com.edoe.orchestrator.repository.ProcessInstanceRepository;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+import org.springframework.beans.factory.annotation.Value;
+import org.springframework.scheduling.annotation.Scheduled;
+import org.springframework.stereotype.Service;
+import org.springframework.transaction.annotation.Transactional;
+
+import java.time.LocalDateTime;
+import java.util.List;
+
+@Service
+public class StepTimeoutService {
+
+    private static final Logger log = LoggerFactory.getLogger(StepTimeoutService.class);
+
+    private final ProcessInstanceRepository repository;
+    private final long stepTimeoutMinutes;
+
+    public StepTimeoutService(ProcessInstanceRepository repository,
+                              @Value("${edoe.orchestrator.step-timeout-minutes:30}") long stepTimeoutMinutes) {
+        this.repository = repository;
+        this.stepTimeoutMinutes = stepTimeoutMinutes;
+    }
+
+    @Scheduled(fixedDelayString = "${edoe.orchestrator.stalled-check-interval-ms:60000}")
+    @Transactional
+    public void detectStalledProcesses() {
+        LocalDateTime threshold = LocalDateTime.now().minusMinutes(stepTimeoutMinutes);
+        List<ProcessInstance> stalled = repository.findStalledProcesses(threshold);
+        for (ProcessInstance instance : stalled) {
+            instance.setStatus(ProcessStatus.STALLED);
+            log.warn("Process {} marked STALLED — step={} stepStartedAt={}",
+                    instance.getId(), instance.getCurrentStep(), instance.getStepStartedAt());
+        }
+    }
+}
