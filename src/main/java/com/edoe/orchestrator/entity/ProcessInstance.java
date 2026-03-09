@@ -66,6 +66,16 @@ public class ProcessInstance {
     @Column(name = "parent_next_step")
     private String parentNextStep;
 
+    // --- Multi-Instance / Scatter-Gather state (Phase 10) ---
+
+    /** Base step name being multi-instanced (e.g. "PROCESS_ORDER"). Null when not in a scatter-gather wait. */
+    @Column(name = "mi_step")
+    private String miStep;
+
+    /** JSON array of per-instance output maps. Null when not in a scatter-gather wait. */
+    @Column(name = "mi_results", columnDefinition = "TEXT")
+    private String miResults;
+
     // --- Fork/Join state (Phase 7) ---
 
     /** Number of parallel branches still outstanding. Null when not in a fork. */

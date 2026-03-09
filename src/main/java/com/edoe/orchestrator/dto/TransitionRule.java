@@ -56,6 +56,17 @@ import java.util.List;
  *   { "callActivity": "CREDIT_CHECK_SUB", "next": "MAKE_DECISION" }
  * ]
  * </pre>
+ *
+ * <p><b>Multi-instance rule</b> — use {@link #multiInstance(String, String, String)}. When
+ * {@code multiInstanceVariable} is set, the engine reads that key from {@code context_data}
+ * as a {@code List}, dispatches one command per element (indexed as {@code STEP__MI__0},
+ * {@code STEP__MI__1}, …), gathers all results into {@code multiInstanceResults} in the context,
+ * then advances to {@code joinStep}. The per-element step name is carried in {@code next}.</p>
+ * <pre>
+ * "RECEIVE_ORDERS_FINISHED": [
+ *   { "multiInstanceVariable": "orderItems", "next": "PROCESS_ORDER", "joinStep": "SHIP_ORDERS" }
+ * ]
+ * </pre>
  */
 @JsonInclude(JsonInclude.Include.NON_NULL)
 @Schema(description = "A conditional branch in a process transition")
@@ -81,31 +92,50 @@ public record TransitionRule(
         Long delayMs,
 
         @Schema(description = "For call-activity rules: name of the child process definition to invoke. The parent enters status=WAITING_FOR_CHILD until the child completes, then advances to 'next'.")
-        String callActivity) {
+        String callActivity,
+
+        @Schema(description = "For multi-instance rules: context key holding a List. The engine dispatches one command per element (step name from 'next') and gathers results into multiInstanceResults before advancing to 'joinStep'.")
+        String multiInstanceVariable) {
 
     /** Factory for single-next rules (the common case). */
     public static TransitionRule of(String condition, String next) {
-        return new TransitionRule(condition, next, null, null, null, null, null);
+        return new TransitionRule(condition, next, null, null, null, null, null, null);
     }
 
     /** Factory for fork rules — fans out to all parallel steps, then joins at joinStep. */
     public static TransitionRule fork(List<String> parallel, String joinStep) {
-        return new TransitionRule(null, null, parallel, joinStep, null, null, null);
+        return new TransitionRule(null, null, parallel, joinStep, null, null, null, null);
     }
 
     /** Factory for suspend rules — routes to suspendStep and halts there until a signal arrives. */
     public static TransitionRule suspend(String condition, String suspendStep) {
-        return new TransitionRule(condition, suspendStep, null, null, Boolean.TRUE, null, null);
+        return new TransitionRule(condition, suspendStep, null, null, Boolean.TRUE, null, null, null);
     }
 
     /** Factory for delay rules — advances to next after delayMs milliseconds. */
     public static TransitionRule delay(Long delayMs, String next) {
-        return new TransitionRule(null, next, null, null, null, delayMs, null);
+        return new TransitionRule(null, next, null, null, null, delayMs, null, null);
     }
 
     /** Factory for call-activity rules — spawns a child process, then advances parent to nextAfterChild. */
     public static TransitionRule callActivity(String condition, String childDefinition, String nextAfterChild) {
-        return new TransitionRule(condition, nextAfterChild, null, null, null, null, childDefinition);
+        return new TransitionRule(condition, nextAfterChild, null, null, null, null, childDefinition, null);
+    }
+
+    /**
+     * Factory for multi-instance (scatter-gather) rules.
+     * Reads {@code multiInstanceVariable} from context as a List, dispatches one
+     * {@code miStep__MI__N} command per element, then advances to {@code joinStep}.
+     */
+    public static TransitionRule multiInstance(String multiInstanceVariable, String miStep, String joinStep) {
+        return new TransitionRule(null, miStep, null, joinStep, null, null, null, multiInstanceVariable);
+    }
+
+    /**
+     * Conditional variant of the multi-instance factory.
+     */
+    public static TransitionRule multiInstance(String condition, String multiInstanceVariable, String miStep, String joinStep) {
+        return new TransitionRule(condition, miStep, null, joinStep, null, null, null, multiInstanceVariable);
     }
 
     /** Returns true if this rule represents a parallel fork. */
@@ -140,5 +170,15 @@ public record TransitionRule(
     @JsonIgnore
     public boolean isCallActivityRule() {
         return callActivity != null && !callActivity.isBlank();
+    }
+
+    /**
+     * Returns true if this rule triggers multi-instance scatter-gather execution.
+     * Named {@code isMultiInstanceRule} (not {@code isMultiInstance}) to avoid
+     * Java Bean naming collision with the {@code multiInstanceVariable} component.
+     */
+    @JsonIgnore
+    public boolean isMultiInstanceRule() {
+        return multiInstanceVariable != null && !multiInstanceVariable.isBlank();
     }
 }

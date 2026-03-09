@@ -65,6 +65,23 @@ class WorkerCommandListenerTest {
     }
 
     @Test
+    void dispatchesToMatchingTaskWithMiSuffix() throws Exception {
+        // Multi-instance indexed type STEP_1__MI__0 should match the STEP_1 task
+        // and respond with STEP_1__MI__0_FINISHED (preserving the full indexed type)
+        String processId = "proc-mi-789";
+        String json = objectMapper.writeValueAsString(
+                Map.of("processId", processId, "type", "STEP_1__MI__0", "data", Map.of("__miIndex", 0))
+        );
+        ConsumerRecord<String, String> record = new ConsumerRecord<>("orchestrator-commands", 0, 3L, processId, json);
+
+        listener.onCommand(record);
+
+        ArgumentCaptor<String> eventTypeCaptor = ArgumentCaptor.forClass(String.class);
+        verify(publisherService).publishEvent(eq(processId), eventTypeCaptor.capture(), any());
+        assertThat(eventTypeCaptor.getValue()).isEqualTo("STEP_1__MI__0_FINISHED");
+    }
+
+    @Test
     void throwsOnDeserializationError() {
         ConsumerRecord<String, String> record = new ConsumerRecord<>("orchestrator-commands", 0, 2L, "key", "not-valid-json{{{");
 

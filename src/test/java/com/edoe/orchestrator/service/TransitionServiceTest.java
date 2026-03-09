@@ -777,6 +777,197 @@ class TransitionServiceTest {
         verifyNoInteractions(outboxRepository);
     }
 
+    // -------------------------------------------------------------------------
+    // Multi-Instance / Scatter-Gather tests (Phase 10)
+    // -------------------------------------------------------------------------
+
+    private static final String MI_TRANSITIONS =
+            "{\"RECEIVE_ORDERS_FINISHED\":[{\"multiInstanceVariable\":\"orderItems\",\"next\":\"PROCESS_ORDER\",\"joinStep\":\"SHIP_ORDERS\"}],"
+            + "\"SHIP_ORDERS_FINISHED\":[{\"next\":\"COMPLETED\"}]}";
+
+    // 32. multiInstance rule scatters to N items — sets MULTI_INSTANCE_WAIT, dispatches N indexed outbox events
+    @Test
+    void handleEvent_multiInstanceRule_scattersToAllItems() throws Exception {
+        UUID id = UUID.randomUUID();
+        ProcessDefinition def = new ProcessDefinition("TEST_FLOW", "RECEIVE_ORDERS", MI_TRANSITIONS);
+        String ctx = objectMapper.writeValueAsString(Map.of("orderItems",
+                List.of(Map.of("sku", "A"), Map.of("sku", "B"), Map.of("sku", "C"))));
+        ProcessInstance inst = instanceWithId(id, "RECEIVE_ORDERS", ProcessStatus.RUNNING, ctx);
+
+        when(repository.findById(id)).thenReturn(Optional.of(inst));
+        when(repository.saveAndFlush(any())).thenAnswer(inv -> inv.getArgument(0));
+        when(definitionRepository.findByName("TEST_FLOW")).thenReturn(Optional.of(def));
+
+        transitionService.handleEvent(id.toString(), "RECEIVE_ORDERS_FINISHED", Map.of());
+
+        assertThat(inst.getCurrentStep()).isEqualTo("MULTI_INSTANCE_WAIT");
+        assertThat(inst.getMiStep()).isEqualTo("PROCESS_ORDER");
+        assertThat(inst.getParallelPending()).isEqualTo(3);
+        assertThat(inst.getJoinStep()).isEqualTo("SHIP_ORDERS");
+
+        ArgumentCaptor<OutboxEvent> captor = ArgumentCaptor.forClass(OutboxEvent.class);
+        verify(outboxRepository, times(3)).save(captor.capture());
+        List<String> dispatchedTypes = captor.getAllValues().stream().map(OutboxEvent::getEventType).toList();
+        assertThat(dispatchedTypes).containsExactlyInAnyOrder(
+                "PROCESS_ORDER__MI__0", "PROCESS_ORDER__MI__1", "PROCESS_ORDER__MI__2");
+    }
+
+    // 33. first MI branch completes — decrements pending, stays in MULTI_INSTANCE_WAIT, no outbox
+    @Test
+    void handleEvent_firstMiBranch_decrementsAndWaits() throws Exception {
+        UUID id = UUID.randomUUID();
+        ProcessInstance inst = instanceWithId(id, "MULTI_INSTANCE_WAIT", ProcessStatus.RUNNING, "{}");
+        inst.setMiStep("PROCESS_ORDER");
+        inst.setParallelPending(3);
+        inst.setJoinStep("SHIP_ORDERS");
+        inst.setParallelCompleted("[]");
+        inst.setMiResults("[]");
+
+        when(repository.findById(id)).thenReturn(Optional.of(inst));
+        when(repository.saveAndFlush(any())).thenAnswer(inv -> inv.getArgument(0));
+
+        transitionService.handleEvent(id.toString(), "PROCESS_ORDER__MI__0_FINISHED",
+                Map.of("processed", true, "sku", "A"));
+
+        assertThat(inst.getCurrentStep()).isEqualTo("MULTI_INSTANCE_WAIT");
+        assertThat(inst.getParallelPending()).isEqualTo(2);
+        verifyNoInteractions(outboxRepository);
+
+        // miResults should have 1 entry
+        @SuppressWarnings("unchecked")
+        List<Object> results = objectMapper.readValue(inst.getMiResults(), List.class);
+        assertThat(results).hasSize(1);
+    }
+
+    // 34. last MI branch completes — gathers results, transitions to joinStep
+    @Test
+    void handleEvent_lastMiBranch_gathersAndTransitions() throws Exception {
+        UUID id = UUID.randomUUID();
+        String existingResults = objectMapper.writeValueAsString(
+                List.of(Map.of("sku", "A"), Map.of("sku", "B")));
+        ProcessInstance inst = instanceWithId(id, "MULTI_INSTANCE_WAIT", ProcessStatus.RUNNING, "{}");
+        inst.setMiStep("PROCESS_ORDER");
+        inst.setParallelPending(1);
+        inst.setJoinStep("SHIP_ORDERS");
+        inst.setParallelCompleted("[\"PROCESS_ORDER__MI__0_FINISHED\",\"PROCESS_ORDER__MI__1_FINISHED\"]");
+        inst.setMiResults(existingResults);
+
+        when(repository.findById(id)).thenReturn(Optional.of(inst));
+        when(repository.saveAndFlush(any())).thenAnswer(inv -> inv.getArgument(0));
+
+        transitionService.handleEvent(id.toString(), "PROCESS_ORDER__MI__2_FINISHED",
+                Map.of("sku", "C", "ok", true));
+
+        assertThat(inst.getCurrentStep()).isEqualTo("SHIP_ORDERS");
+        assertThat(inst.getParallelPending()).isNull();
+        assertThat(inst.getJoinStep()).isNull();
+        assertThat(inst.getMiStep()).isNull();
+        assertThat(inst.getMiResults()).isNull();
+
+        ArgumentCaptor<OutboxEvent> captor = ArgumentCaptor.forClass(OutboxEvent.class);
+        verify(outboxRepository).save(captor.capture());
+        assertThat(captor.getValue().getEventType()).isEqualTo("SHIP_ORDERS");
+
+        // context must contain the gathered multiInstanceResults list (3 entries)
+        @SuppressWarnings("unchecked")
+        Map<String, Object> ctx = objectMapper.readValue(inst.getContextData(), Map.class);
+        assertThat(ctx).containsKey("multiInstanceResults");
+        @SuppressWarnings("unchecked")
+        List<Object> gathered = (List<Object>) ctx.get("multiInstanceResults");
+        assertThat(gathered).hasSize(3);
+    }
+
+    // 35. duplicate MI branch event is ignored (idempotency)
+    @Test
+    void handleEvent_duplicateMiBranch_ignored() throws Exception {
+        UUID id = UUID.randomUUID();
+        ProcessInstance inst = instanceWithId(id, "MULTI_INSTANCE_WAIT", ProcessStatus.RUNNING, "{}");
+        inst.setMiStep("PROCESS_ORDER");
+        inst.setParallelPending(2);
+        inst.setJoinStep("SHIP_ORDERS");
+        inst.setParallelCompleted("[\"PROCESS_ORDER__MI__0_FINISHED\"]");
+        inst.setMiResults("[{}]");
+
+        when(repository.findById(id)).thenReturn(Optional.of(inst));
+
+        transitionService.handleEvent(id.toString(), "PROCESS_ORDER__MI__0_FINISHED",
+                Map.of("sku", "A"));
+
+        verify(repository, never()).saveAndFlush(any());
+        verifyNoInteractions(outboxRepository);
+        assertThat(inst.getParallelPending()).isEqualTo(2);
+    }
+
+    // 36. empty collection skips directly to joinStep with multiInstanceResults=[]
+    @Test
+    void handleEvent_emptyCollection_skipsDirectlyToJoinStep() throws Exception {
+        UUID id = UUID.randomUUID();
+        ProcessDefinition def = new ProcessDefinition("TEST_FLOW", "RECEIVE_ORDERS", MI_TRANSITIONS);
+        String ctx = objectMapper.writeValueAsString(Map.of("orderItems", List.of()));
+        ProcessInstance inst = instanceWithId(id, "RECEIVE_ORDERS", ProcessStatus.RUNNING, ctx);
+
+        when(repository.findById(id)).thenReturn(Optional.of(inst));
+        when(repository.saveAndFlush(any())).thenAnswer(inv -> inv.getArgument(0));
+        when(definitionRepository.findByName("TEST_FLOW")).thenReturn(Optional.of(def));
+
+        transitionService.handleEvent(id.toString(), "RECEIVE_ORDERS_FINISHED", Map.of());
+
+        // Must NOT enter MULTI_INSTANCE_WAIT — jump straight to joinStep
+        assertThat(inst.getCurrentStep()).isEqualTo("SHIP_ORDERS");
+        assertThat(inst.getParallelPending()).isNull();
+
+        // One outbox event for the join step
+        ArgumentCaptor<OutboxEvent> captor = ArgumentCaptor.forClass(OutboxEvent.class);
+        verify(outboxRepository).save(captor.capture());
+        assertThat(captor.getValue().getEventType()).isEqualTo("SHIP_ORDERS");
+
+        // Context must have empty multiInstanceResults
+        @SuppressWarnings("unchecked")
+        Map<String, Object> result = objectMapper.readValue(inst.getContextData(), Map.class);
+        assertThat(result).containsKey("multiInstanceResults");
+        @SuppressWarnings("unchecked")
+        List<Object> gathered = (List<Object>) result.get("multiInstanceResults");
+        assertThat(gathered).isEmpty();
+    }
+
+    // 37. single-item collection: scatter one command, gather immediately on completion
+    @Test
+    void handleEvent_singleItemCollection_scatterThenGather() throws Exception {
+        UUID id = UUID.randomUUID();
+        ProcessDefinition def = new ProcessDefinition("TEST_FLOW", "RECEIVE_ORDERS", MI_TRANSITIONS);
+        String ctx = objectMapper.writeValueAsString(Map.of("orderItems", List.of(Map.of("sku", "SOLO"))));
+        ProcessInstance inst = instanceWithId(id, "RECEIVE_ORDERS", ProcessStatus.RUNNING, ctx);
+
+        when(repository.findById(id)).thenReturn(Optional.of(inst));
+        when(repository.saveAndFlush(any())).thenAnswer(inv -> inv.getArgument(0));
+        when(definitionRepository.findByName("TEST_FLOW")).thenReturn(Optional.of(def));
+
+        // Phase 1: scatter
+        transitionService.handleEvent(id.toString(), "RECEIVE_ORDERS_FINISHED", Map.of());
+
+        assertThat(inst.getCurrentStep()).isEqualTo("MULTI_INSTANCE_WAIT");
+        assertThat(inst.getParallelPending()).isEqualTo(1);
+
+        ArgumentCaptor<OutboxEvent> scatterCaptor = ArgumentCaptor.forClass(OutboxEvent.class);
+        verify(outboxRepository).save(scatterCaptor.capture());
+        assertThat(scatterCaptor.getValue().getEventType()).isEqualTo("PROCESS_ORDER__MI__0");
+
+        // Reset outbox mock for phase 2
+        reset(outboxRepository);
+
+        // Phase 2: single branch completes → gather fires immediately
+        transitionService.handleEvent(id.toString(), "PROCESS_ORDER__MI__0_FINISHED",
+                Map.of("sku", "SOLO", "shipped", true));
+
+        assertThat(inst.getCurrentStep()).isEqualTo("SHIP_ORDERS");
+        assertThat(inst.getParallelPending()).isNull();
+        assertThat(inst.getMiStep()).isNull();
+
+        ArgumentCaptor<OutboxEvent> gatherCaptor = ArgumentCaptor.forClass(OutboxEvent.class);
+        verify(outboxRepository).save(gatherCaptor.capture());
+        assertThat(gatherCaptor.getValue().getEventType()).isEqualTo("SHIP_ORDERS");
+    }
+
     // 31. child completion with nextAfterChild=COMPLETED completes parent too
     @Test
     void handleEvent_childCompletesWithNextCompleted_completesParent() throws Exception {

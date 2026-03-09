@@ -34,6 +34,8 @@ public class TransitionService {
 
     private static final String COMPLETED_SENTINEL = "COMPLETED";
     private static final String PARALLEL_WAIT = "PARALLEL_WAIT";
+    private static final String MULTI_INSTANCE_WAIT = "MULTI_INSTANCE_WAIT";
+    private static final String MI_SEPARATOR = "__MI__";
 
     private final ProcessInstanceRepository repository;
     private final OutboxEventRepository outboxRepository;
@@ -74,6 +76,16 @@ public class TransitionService {
                 handleFailure(instance, outputData);
             } else {
                 handleParallelBranchComplete(instance, eventType, outputData);
+            }
+            return;
+        }
+
+        // Multi-instance wait: an instance from a scatter-gather just completed
+        if (MULTI_INSTANCE_WAIT.equals(instance.getCurrentStep())) {
+            if (eventType.endsWith("_FAILED")) {
+                handleMultiInstanceFailure(instance, outputData);
+            } else {
+                handleMultiInstanceBranchComplete(instance, eventType, outputData);
             }
             return;
         }
@@ -123,6 +135,8 @@ public class TransitionService {
 
         if (matched != null && matched.isFork()) {
             dispatchFork(instance, matched.parallel(), matched.joinStep(), mergedData);
+        } else if (matched != null && matched.isMultiInstanceRule()) {
+            dispatchMultiInstance(instance, matched.multiInstanceVariable(), matched.next(), matched.joinStep(), mergedData);
         } else if (matched != null && matched.isSuspendGate()) {
             suspendProcess(instance, matched.next(), mergedData);
         } else if (matched != null && matched.isDelay()) {
@@ -304,6 +318,127 @@ public class TransitionService {
             log.debug("Process {} parallel branch {} completed, {} remaining",
                     instance.getId(), eventType, remaining);
         }
+    }
+
+    // -------------------------------------------------------------------------
+    // Multi-Instance / Scatter-Gather
+    // -------------------------------------------------------------------------
+
+    /**
+     * Reads the named collection from the context, dispatches one indexed command
+     * per element ({@code miStep__MI__0}, {@code miStep__MI__1}, …), and parks the
+     * process in {@code MULTI_INSTANCE_WAIT}. If the collection is empty or absent,
+     * the process skips directly to {@code joinStep} with an empty results list.
+     */
+    private void dispatchMultiInstance(ProcessInstance instance, String variableName,
+            String miStep, String joinStep, Map<String, Object> context) {
+        Object raw = context.get(variableName);
+        List<?> items = null;
+        if (raw instanceof List<?> list) {
+            items = list;
+        } else if (raw != null) {
+            log.warn("Process {} multiInstanceVariable '{}' is not a List (type={}), treating as empty",
+                    instance.getId(), variableName, raw.getClass().getSimpleName());
+        }
+
+        if (items == null || items.isEmpty()) {
+            // Zero-iteration: skip directly to joinStep
+            context.put("multiInstanceResults", List.of());
+            instance.setCurrentStep(joinStep);
+            instance.setStepStartedAt(LocalDateTime.now());
+            instance.setContextData(serializeContext(context));
+            repository.saveAndFlush(instance);
+            outboxRepository.save(new OutboxEvent(instance.getId().toString(), joinStep, serializeContext(context)));
+            log.info("Process {} multi-instance '{}' is empty, skipping directly to {}",
+                    instance.getId(), variableName, joinStep);
+            return;
+        }
+
+        instance.setCurrentStep(MULTI_INSTANCE_WAIT);
+        instance.setMiStep(miStep);
+        instance.setParallelPending(items.size());
+        instance.setJoinStep(joinStep);
+        instance.setParallelCompleted("[]");
+        instance.setMiResults("[]");
+        instance.setStepStartedAt(LocalDateTime.now());
+        instance.setContextData(serializeContext(context));
+        repository.saveAndFlush(instance);
+
+        for (int i = 0; i < items.size(); i++) {
+            String commandType = miStep + MI_SEPARATOR + i;
+            Map<String, Object> itemContext = new HashMap<>(context);
+            itemContext.put("__miItem", items.get(i));
+            itemContext.put("__miIndex", i);
+            outboxRepository.save(new OutboxEvent(instance.getId().toString(), commandType, serializeContext(itemContext)));
+        }
+        log.info("Process {} multi-instance scatter: {} × {} instances (joinStep={})",
+                instance.getId(), items.size(), miStep, joinStep);
+    }
+
+    /**
+     * Called when an indexed MI event ({@code STEP__MI__N_FINISHED}) arrives while
+     * the process is in MULTI_INSTANCE_WAIT. Appends the output, decrements the
+     * pending count, and — when the last instance reports — gathers all results and
+     * transitions to the join step.
+     */
+    private void handleMultiInstanceBranchComplete(ProcessInstance instance,
+            String eventType, Map<String, Object> outputData) {
+        // Idempotency: ignore if this instance already reported
+        List<String> completed = deserializeStringList(instance.getParallelCompleted());
+        if (completed.contains(eventType)) {
+            log.warn("Duplicate MI event {} for process {}, ignoring", eventType, instance.getId());
+            return;
+        }
+
+        // Append per-instance output
+        List<Map<String, Object>> results = deserializeResultsList(instance.getMiResults());
+        results.add(outputData != null ? outputData : Map.of());
+
+        // Merge into shared context (same as parallel branches)
+        Map<String, Object> mergedData = mergeContext(instance.getContextData(), outputData);
+        instance.setContextData(serializeContext(mergedData));
+        instance.setMiResults(serializeMiResults(results));
+
+        completed.add(eventType);
+        instance.setParallelCompleted(serializeStringList(completed));
+
+        int remaining = instance.getParallelPending() - 1;
+        instance.setParallelPending(remaining);
+
+        if (remaining <= 0) {
+            // Gather: put collected results into context under "multiInstanceResults"
+            mergedData.put("multiInstanceResults", results);
+            String joinStep = instance.getJoinStep();
+            instance.setCurrentStep(joinStep);
+            instance.setJoinStep(null);
+            instance.setParallelPending(null);
+            instance.setParallelCompleted(null);
+            instance.setMiStep(null);
+            instance.setMiResults(null);
+            instance.setStepStartedAt(LocalDateTime.now());
+            instance.setContextData(serializeContext(mergedData));
+            repository.saveAndFlush(instance);
+            outboxRepository.save(new OutboxEvent(instance.getId().toString(), joinStep, serializeContext(mergedData)));
+            log.info("Process {} multi-instance gather complete, transitioning to {}", instance.getId(), joinStep);
+        } else {
+            repository.saveAndFlush(instance);
+            log.debug("Process {} MI branch {} completed, {} remaining",
+                    instance.getId(), eventType, remaining);
+        }
+    }
+
+    /**
+     * Handles a {@code _FAILED} event during MULTI_INSTANCE_WAIT.
+     * Clears all MI state and delegates to the standard failure/compensation path.
+     */
+    private void handleMultiInstanceFailure(ProcessInstance instance, Map<String, Object> outputData) {
+        log.info("Process {} multi-instance branch failed, failing process", instance.getId());
+        instance.setMiStep(null);
+        instance.setMiResults(null);
+        instance.setJoinStep(null);
+        instance.setParallelPending(null);
+        instance.setParallelCompleted(null);
+        handleFailure(instance, outputData);
     }
 
     // -------------------------------------------------------------------------
@@ -555,6 +690,25 @@ public class TransitionService {
             return objectMapper.writeValueAsString(list);
         } catch (JsonProcessingException e) {
             throw new RuntimeException("Failed to serialize string list", e);
+        }
+    }
+
+    private List<Map<String, Object>> deserializeResultsList(String json) {
+        if (json == null || json.isBlank())
+            return new ArrayList<>();
+        try {
+            return objectMapper.readValue(json, new TypeReference<List<Map<String, Object>>>() {
+            });
+        } catch (JsonProcessingException e) {
+            return new ArrayList<>();
+        }
+    }
+
+    private String serializeMiResults(List<Map<String, Object>> results) {
+        try {
+            return objectMapper.writeValueAsString(results);
+        } catch (JsonProcessingException e) {
+            throw new RuntimeException("Failed to serialize MI results", e);
         }
     }
 

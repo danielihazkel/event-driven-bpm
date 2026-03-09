@@ -43,6 +43,7 @@ public class DataInitializer implements CommandLineRunner {
         seedDelayFlow();
         seedCreditCheckSub();
         seedSubProcessFlow();
+        seedScatterGatherFlow();
     }
 
     // -------------------------------------------------------------------------
@@ -191,6 +192,26 @@ public class DataInitializer implements CommandLineRunner {
                 "COLLECT_APPLICATION_FINISHED", List.of(
                         TransitionRule.callActivity(null, "CREDIT_CHECK_SUB", "MAKE_DECISION")),
                 "MAKE_DECISION_FINISHED", List.of(TransitionRule.of(null, "COMPLETED"))));
+    }
+
+    // -------------------------------------------------------------------------
+    // SCATTER_GATHER_FLOW — demonstrates multi-instance scatter-gather (Phase 10)
+    // Features: multiInstanceVariable reads a List from context, dispatches one
+    // PROCESS_ORDER__MI__N command per element, gathers results into
+    // multiInstanceResults, then advances to SHIP_ORDERS.
+    //
+    // Start payload example:
+    // {"definitionName":"SCATTER_GATHER_FLOW","initialData":{
+    //   "orderItems":[{"sku":"WIDGET-A","qty":2},{"sku":"WIDGET-B","qty":1}]}}
+    //
+    // Flow:
+    // RECEIVE_ORDERS → scatter(orderItems → PROCESS_ORDER) → SHIP_ORDERS → COMPLETED
+    // -------------------------------------------------------------------------
+    private void seedScatterGatherFlow() {
+        upsert("SCATTER_GATHER_FLOW", "RECEIVE_ORDERS", Map.of(
+                "RECEIVE_ORDERS_FINISHED", List.of(
+                        TransitionRule.multiInstance("orderItems", "PROCESS_ORDER", "SHIP_ORDERS")),
+                "SHIP_ORDERS_FINISHED", List.of(TransitionRule.of(null, "COMPLETED"))));
     }
 
     // -------------------------------------------------------------------------
