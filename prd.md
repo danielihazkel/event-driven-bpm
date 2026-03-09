@@ -135,6 +135,31 @@ Conditions use **Spring Expression Language (SpEL)** and are evaluated against t
   - `LOAN_APPROVAL` — credit-score gate → auto-approve or manual review → disburse or reject.
   - `ORDER_FULFILLMENT` — inventory check + payment gate with multiple terminal paths.
 
+### Phase 7: Parallel Fork / Join Steps ✅
+
+* [x] **TransitionRule Fork Fields:** Extend `TransitionRule` with optional `parallel` (`List<String>`) and `joinStep` (`String`) fields. When `parallel` is set, the rule fans out instead of advancing to a single `next`.
+* [x] **ProcessInstance Fork State:** Add `parallelPending` (`INT` nullable), `joinStep` (`VARCHAR` nullable), and `parallelCompleted` (`TEXT` nullable) columns to `process_instances` to track outstanding branches.
+* [x] **Fork Dispatch:** When `TransitionService` resolves a rule with `parallel`, publish one Kafka command per branch, set `parallel_pending = N`, and set `current_step = PARALLEL_WAIT`.
+* [x] **Join Logic:** Each incoming `*_FINISHED` event for a parallel branch decrements `parallel_pending`. When it reaches 0, transition to `joinStep` and dispatch the join command.
+* [x] **Idempotency Guard:** Duplicate `*_FINISHED` events for an already-merged parallel branch are ignored via `parallelCompleted` JSON array tracking.
+* [x] **Updated Seeded Example:** Added `PARALLEL_FLOW` — `PREPARE_APPLICATION` forks into `VALIDATE_CREDIT ∥ VERIFY_IDENTITY`, then joins at `APPROVE_LOAN`.
+
+### Phase 8: Human-in-the-Loop / Approval Gates
+
+* [ ] **Signal Endpoint:** `POST /api/processes/{id}/signal` accepts a JSON body (`{ "event": "APPROVAL_GRANTED", "data": {...} }`) and injects a synthetic event into the orchestrator, resuming a suspended process.
+* [ ] **Suspend Step Type:** A step whose transition rule has `suspend: true` causes the engine to set `status = SUSPENDED` and stop dispatching further commands, waiting for an external signal.
+* [ ] **Resume Logic:** `TransitionService` handles the signal event exactly like a worker `*_FINISHED` event, evaluating transition rules from the suspended step.
+* [ ] **Timeout Integration:** `StepTimeoutService` must skip `SUSPENDED` processes (they are intentionally waiting, not stalled).
+* [ ] **Updated Seeded Example:** Update `LOAN_APPROVAL` so `MANUAL_REVIEW` suspends the process until a loan-officer signal arrives.
+
+### Phase 9: Compensation / Saga Rollback
+
+* [ ] **Compensation Map:** `ProcessDefinition` gains an optional `compensations` field — a `Map<String, String>` of `step → compensating_step` (e.g., `"RESERVE_INVENTORY" → "UNDO_RESERVE_INVENTORY"`).
+* [ ] **Failure Path:** When a `*_FAILED` event is received, instead of moving to `FAILED`, the engine enters a compensation loop: walks back through `completedSteps` in reverse and dispatches each compensating command.
+* [ ] **Compensation Tracking:** `ProcessInstance` gains `compensating` (Boolean) and `completedSteps` (JSON array) columns to track saga rollback progress.
+* [ ] **Terminal States:** After all compensations complete, the process moves to `FAILED` (partial / unrecoverable) or `CANCELLED` (fully rolled back).
+* [ ] **Updated Seeded Example:** Add a `PAYMENT_SAGA` flow that demonstrates full rollback: `RESERVE_INVENTORY → CHARGE_PAYMENT → SHIP_ORDER`, with compensations for each step.
+
 ---
 
 ## 6. The "Generic" Flow Logic

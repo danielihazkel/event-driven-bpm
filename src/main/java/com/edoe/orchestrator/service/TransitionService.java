@@ -21,6 +21,7 @@ import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
 import java.time.LocalDateTime;
+import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
@@ -31,6 +32,7 @@ public class TransitionService {
 
     private static final Logger log = LoggerFactory.getLogger(TransitionService.class);
     private static final String COMPLETED_SENTINEL = "COMPLETED";
+    private static final String PARALLEL_WAIT = "PARALLEL_WAIT";
 
     private final ProcessInstanceRepository repository;
     private final OutboxEventRepository outboxRepository;
@@ -69,10 +71,23 @@ public class TransitionService {
         ProcessInstance instance = repository.findById(uuid)
                 .orElseThrow(() -> new IllegalArgumentException("Unknown processId: " + processId));
 
+        if (instance.getStatus() != ProcessStatus.RUNNING) {
+            log.warn("Ignoring event {} for non-running process {} (status={})",
+                    eventType, processId, instance.getStatus());
+            return;
+        }
+
+        // Parallel wait: a branch from an active fork just completed
+        if (PARALLEL_WAIT.equals(instance.getCurrentStep())) {
+            handleParallelBranchComplete(instance, eventType, outputData);
+            return;
+        }
+
+        // Normal path: idempotency check
         String expectedEvent = instance.getCurrentStep() + "_FINISHED";
-        if (!eventType.equals(expectedEvent) || instance.getStatus() != ProcessStatus.RUNNING) {
-            log.warn("Ignoring stale/duplicate event {} for process {} (step={}, status={})",
-                    eventType, processId, instance.getCurrentStep(), instance.getStatus());
+        if (!eventType.equals(expectedEvent)) {
+            log.warn("Ignoring stale/duplicate event {} for process {} (step={})",
+                    eventType, processId, instance.getCurrentStep());
             return;
         }
 
@@ -84,41 +99,115 @@ public class TransitionService {
         instance.setContextData(serializeContext(mergedData));
 
         List<TransitionRule> rules = transitions.get(eventType);
-        String nextStep = (rules != null) ? evaluateBranches(rules, mergedData) : COMPLETED_SENTINEL;
+        TransitionRule matched = (rules != null) ? evaluateBranches(rules, mergedData) : null;
 
-        if (COMPLETED_SENTINEL.equals(nextStep)) {
-            instance.setCurrentStep(COMPLETED_SENTINEL);
-            instance.setStatus(ProcessStatus.COMPLETED);
-            instance.setCompletedAt(LocalDateTime.now());
-            repository.saveAndFlush(instance);
-            log.debug("Process {} completed", processId);
+        if (matched != null && matched.isFork()) {
+            dispatchFork(instance, matched.parallel(), matched.joinStep(), mergedData);
         } else {
-            instance.setCurrentStep(nextStep);
-            instance.setStepStartedAt(LocalDateTime.now());
-            repository.saveAndFlush(instance);
-            outboxRepository.save(new OutboxEvent(processId, nextStep, serializeContext(mergedData)));
-            log.debug("Process {} transitioned to step {}", processId, nextStep);
+            String nextStep = (matched == null) ? COMPLETED_SENTINEL : matched.next();
+            if (COMPLETED_SENTINEL.equals(nextStep)) {
+                instance.setCurrentStep(COMPLETED_SENTINEL);
+                instance.setStatus(ProcessStatus.COMPLETED);
+                instance.setCompletedAt(LocalDateTime.now());
+                repository.saveAndFlush(instance);
+                log.debug("Process {} completed", processId);
+            } else {
+                instance.setCurrentStep(nextStep);
+                instance.setStepStartedAt(LocalDateTime.now());
+                repository.saveAndFlush(instance);
+                outboxRepository.save(new OutboxEvent(processId, nextStep, serializeContext(mergedData)));
+                log.debug("Process {} transitioned to step {}", processId, nextStep);
+            }
         }
     }
 
+    // -------------------------------------------------------------------------
+    // Fork / Join
+    // -------------------------------------------------------------------------
+
     /**
-     * Evaluates branches top-to-bottom and returns the {@code next} of the first matching rule.
+     * Sets the process into PARALLEL_WAIT state, persists fork metadata, and
+     * enqueues one outbox command per parallel branch.
+     */
+    private void dispatchFork(ProcessInstance instance, List<String> parallelSteps,
+                              String joinStep, Map<String, Object> context) {
+        instance.setCurrentStep(PARALLEL_WAIT);
+        instance.setParallelPending(parallelSteps.size());
+        instance.setJoinStep(joinStep);
+        instance.setParallelCompleted("[]");
+        instance.setStepStartedAt(LocalDateTime.now());
+        repository.saveAndFlush(instance);
+
+        String contextJson = serializeContext(context);
+        for (String step : parallelSteps) {
+            outboxRepository.save(new OutboxEvent(instance.getId().toString(), step, contextJson));
+        }
+        log.debug("Process {} forked into {} parallel branches: {}", instance.getId(), parallelSteps.size(), parallelSteps);
+    }
+
+    /**
+     * Called when an event arrives while the process is in PARALLEL_WAIT.
+     * Merges the branch output, decrements the pending count, and — when the
+     * last branch reports — transitions to the join step.
+     */
+    private void handleParallelBranchComplete(ProcessInstance instance,
+                                              String eventType,
+                                              Map<String, Object> outputData) {
+        // Idempotency: ignore if this branch already reported
+        List<String> completed = deserializeStringList(instance.getParallelCompleted());
+        if (completed.contains(eventType)) {
+            log.warn("Duplicate parallel branch event {} for process {}, ignoring", eventType, instance.getId());
+            return;
+        }
+
+        Map<String, Object> mergedData = mergeContext(instance.getContextData(), outputData);
+        instance.setContextData(serializeContext(mergedData));
+
+        completed.add(eventType);
+        instance.setParallelCompleted(serializeStringList(completed));
+
+        int remaining = instance.getParallelPending() - 1;
+        instance.setParallelPending(remaining);
+
+        if (remaining <= 0) {
+            String joinStep = instance.getJoinStep();
+            instance.setCurrentStep(joinStep);
+            instance.setJoinStep(null);
+            instance.setParallelPending(null);
+            instance.setParallelCompleted(null);
+            instance.setStepStartedAt(LocalDateTime.now());
+            repository.saveAndFlush(instance);
+            outboxRepository.save(new OutboxEvent(instance.getId().toString(), joinStep, serializeContext(mergedData)));
+            log.debug("Process {} fork joined, transitioning to {}", instance.getId(), joinStep);
+        } else {
+            repository.saveAndFlush(instance);
+            log.debug("Process {} parallel branch {} completed, {} remaining",
+                    instance.getId(), eventType, remaining);
+        }
+    }
+
+    // -------------------------------------------------------------------------
+    // Helpers
+    // -------------------------------------------------------------------------
+
+    /**
+     * Evaluates branches top-to-bottom and returns the first matching {@link TransitionRule}.
      * A null or blank condition is an unconditional default (always matches).
      * Each context key is available in SpEL as {@code #keyName}.
-     * If no branch matches, returns {@link #COMPLETED_SENTINEL}.
+     * Returns {@code null} if no branch matches (treated as COMPLETED by the caller).
      */
-    private String evaluateBranches(List<TransitionRule> rules, Map<String, Object> context) {
+    private TransitionRule evaluateBranches(List<TransitionRule> rules, Map<String, Object> context) {
         StandardEvaluationContext evalContext = new StandardEvaluationContext();
         context.forEach(evalContext::setVariable);
 
         for (TransitionRule rule : rules) {
             if (rule.condition() == null || rule.condition().isBlank()) {
-                return rule.next(); // unconditional default
+                return rule; // unconditional default
             }
             try {
                 Boolean matches = spelParser.parseExpression(rule.condition()).getValue(evalContext, Boolean.class);
                 if (Boolean.TRUE.equals(matches)) {
-                    return rule.next();
+                    return rule;
                 }
             } catch (EvaluationException e) {
                 log.warn("Condition evaluation failed for expression '{}': {}", rule.condition(), e.getMessage());
@@ -126,7 +215,7 @@ public class TransitionService {
         }
 
         log.warn("No branch matched for rules {}; defaulting to COMPLETED", rules);
-        return COMPLETED_SENTINEL;
+        return null;
     }
 
     private Map<String, List<TransitionRule>> deserializeTransitions(String transitionsJson) {
@@ -158,6 +247,23 @@ public class TransitionService {
             return objectMapper.writeValueAsString(data);
         } catch (JsonProcessingException e) {
             throw new RuntimeException("Failed to serialize context data", e);
+        }
+    }
+
+    private List<String> deserializeStringList(String json) {
+        if (json == null || json.isBlank()) return new ArrayList<>();
+        try {
+            return objectMapper.readValue(json, new TypeReference<List<String>>() {});
+        } catch (JsonProcessingException e) {
+            return new ArrayList<>();
+        }
+    }
+
+    private String serializeStringList(List<String> list) {
+        try {
+            return objectMapper.writeValueAsString(list);
+        } catch (JsonProcessingException e) {
+            throw new RuntimeException("Failed to serialize string list", e);
         }
     }
 }

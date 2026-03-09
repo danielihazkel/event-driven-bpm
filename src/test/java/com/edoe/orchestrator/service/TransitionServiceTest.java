@@ -281,4 +281,90 @@ class TransitionServiceTest {
         assertThat(inst.getCurrentStep()).isEqualTo("REJECT_STEP");
         assertThat(inst.getStatus()).isEqualTo(ProcessStatus.RUNNING);
     }
+
+    // 13. Fork rule fans out — sets PARALLEL_WAIT, saves N outbox events, sets parallelPending
+    @Test
+    void handleEvent_forkRule_setsParallelWaitAndDispatchesBranches() throws Exception {
+        UUID id = UUID.randomUUID();
+        String forkTransitions = "{\"PREPARE_FINISHED\":["
+                + "{\"parallel\":[\"VALIDATE_CREDIT\",\"VERIFY_IDENTITY\"],\"joinStep\":\"APPROVE_LOAN\"}"
+                + "]}";
+        ProcessDefinition def = new ProcessDefinition("TEST_FLOW", "PREPARE", forkTransitions);
+        ProcessInstance inst = instanceWithId(id, "PREPARE", ProcessStatus.RUNNING, "{}");
+        when(repository.findById(id)).thenReturn(Optional.of(inst));
+        when(repository.saveAndFlush(any())).thenAnswer(inv -> inv.getArgument(0));
+        when(definitionRepository.findByName("TEST_FLOW")).thenReturn(Optional.of(def));
+
+        transitionService.handleEvent(id.toString(), "PREPARE_FINISHED", Map.of());
+
+        assertThat(inst.getCurrentStep()).isEqualTo("PARALLEL_WAIT");
+        assertThat(inst.getParallelPending()).isEqualTo(2);
+        assertThat(inst.getJoinStep()).isEqualTo("APPROVE_LOAN");
+
+        ArgumentCaptor<OutboxEvent> captor = ArgumentCaptor.forClass(OutboxEvent.class);
+        verify(outboxRepository, times(2)).save(captor.capture());
+        List<String> dispatchedTypes = captor.getAllValues().stream()
+                .map(OutboxEvent::getEventType).toList();
+        assertThat(dispatchedTypes).containsExactlyInAnyOrder("VALIDATE_CREDIT", "VERIFY_IDENTITY");
+    }
+
+    // 14. First parallel branch completes — decrements pending, stays in PARALLEL_WAIT, no outbox
+    @Test
+    void handleEvent_firstParallelBranch_decrementsAndWaits() throws Exception {
+        UUID id = UUID.randomUUID();
+        ProcessInstance inst = instanceWithId(id, "PARALLEL_WAIT", ProcessStatus.RUNNING, "{}");
+        inst.setParallelPending(2);
+        inst.setJoinStep("APPROVE_LOAN");
+        inst.setParallelCompleted("[]");
+        when(repository.findById(id)).thenReturn(Optional.of(inst));
+        when(repository.saveAndFlush(any())).thenAnswer(inv -> inv.getArgument(0));
+
+        transitionService.handleEvent(id.toString(), "VALIDATE_CREDIT_FINISHED", Map.of("creditScore", 750));
+
+        assertThat(inst.getParallelPending()).isEqualTo(1);
+        assertThat(inst.getCurrentStep()).isEqualTo("PARALLEL_WAIT");
+        verifyNoInteractions(outboxRepository);
+    }
+
+    // 15. Last parallel branch completes — transitions to joinStep, dispatches join outbox event
+    @Test
+    void handleEvent_lastParallelBranch_transitionsToJoinStep() throws Exception {
+        UUID id = UUID.randomUUID();
+        ProcessInstance inst = instanceWithId(id, "PARALLEL_WAIT", ProcessStatus.RUNNING, "{\"creditScore\":750}");
+        inst.setParallelPending(1);
+        inst.setJoinStep("APPROVE_LOAN");
+        inst.setParallelCompleted("[\"VALIDATE_CREDIT_FINISHED\"]");
+        when(repository.findById(id)).thenReturn(Optional.of(inst));
+        when(repository.saveAndFlush(any())).thenAnswer(inv -> inv.getArgument(0));
+
+        transitionService.handleEvent(id.toString(), "VERIFY_IDENTITY_FINISHED", Map.of("identityVerified", true));
+
+        assertThat(inst.getCurrentStep()).isEqualTo("APPROVE_LOAN");
+        assertThat(inst.getParallelPending()).isNull();
+        assertThat(inst.getJoinStep()).isNull();
+        assertThat(inst.getStatus()).isEqualTo(ProcessStatus.RUNNING);
+
+        ArgumentCaptor<OutboxEvent> captor = ArgumentCaptor.forClass(OutboxEvent.class);
+        verify(outboxRepository).save(captor.capture());
+        assertThat(captor.getValue().getEventType()).isEqualTo("APPROVE_LOAN");
+    }
+
+    // 16. Duplicate parallel branch event is ignored (idempotency during fork)
+    @Test
+    void handleEvent_duplicateParallelBranch_ignored() throws Exception {
+        UUID id = UUID.randomUUID();
+        ProcessInstance inst = instanceWithId(id, "PARALLEL_WAIT", ProcessStatus.RUNNING, "{}");
+        inst.setParallelPending(1);
+        inst.setJoinStep("APPROVE_LOAN");
+        // VALIDATE_CREDIT_FINISHED already recorded as completed
+        inst.setParallelCompleted("[\"VALIDATE_CREDIT_FINISHED\"]");
+        when(repository.findById(id)).thenReturn(Optional.of(inst));
+
+        transitionService.handleEvent(id.toString(), "VALIDATE_CREDIT_FINISHED", Map.of("creditScore", 800));
+
+        // Nothing should change — no save, no outbox
+        verify(repository, never()).saveAndFlush(any());
+        verifyNoInteractions(outboxRepository);
+        assertThat(inst.getParallelPending()).isEqualTo(1);
+    }
 }

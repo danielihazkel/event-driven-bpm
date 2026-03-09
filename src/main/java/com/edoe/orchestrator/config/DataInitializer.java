@@ -40,6 +40,7 @@ public class DataInitializer implements CommandLineRunner {
         seedDefaultFlow();
         seedLoanApproval();
         seedOrderFulfillment();
+        seedParallelFlow();
     }
 
     // -------------------------------------------------------------------------
@@ -48,8 +49,8 @@ public class DataInitializer implements CommandLineRunner {
     // -------------------------------------------------------------------------
     private void seedDefaultFlow() {
         upsert("DEFAULT_FLOW", "STEP_1", Map.of(
-                "STEP_1_FINISHED", List.of(new TransitionRule(null, "STEP_2")),
-                "STEP_2_FINISHED", List.of(new TransitionRule(null, "COMPLETED"))
+                "STEP_1_FINISHED", List.of(TransitionRule.of(null,"STEP_2")),
+                "STEP_2_FINISHED", List.of(TransitionRule.of(null,"COMPLETED"))
         ));
     }
 
@@ -67,18 +68,18 @@ public class DataInitializer implements CommandLineRunner {
     private void seedLoanApproval() {
         upsert("LOAN_APPROVAL", "VALIDATE_CREDIT", Map.of(
                 "VALIDATE_CREDIT_FINISHED", List.of(
-                        new TransitionRule("#creditScore > 700", "AUTO_APPROVE"),
-                        new TransitionRule(null, "MANUAL_REVIEW")          // default branch
+                        TransitionRule.of("#creditScore > 700", "AUTO_APPROVE"),
+                        TransitionRule.of(null,"MANUAL_REVIEW")          // default branch
                 ),
                 "AUTO_APPROVE_FINISHED", List.of(
-                        new TransitionRule(null, "DISBURSE_FUNDS")
+                        TransitionRule.of(null,"DISBURSE_FUNDS")
                 ),
                 "MANUAL_REVIEW_FINISHED", List.of(
-                        new TransitionRule("#approved == true", "DISBURSE_FUNDS"),
-                        new TransitionRule(null, "SEND_REJECTION")         // default branch
+                        TransitionRule.of("#approved == true", "DISBURSE_FUNDS"),
+                        TransitionRule.of(null,"SEND_REJECTION")         // default branch
                 ),
-                "DISBURSE_FUNDS_FINISHED", List.of(new TransitionRule(null, "COMPLETED")),
-                "SEND_REJECTION_FINISHED",  List.of(new TransitionRule(null, "COMPLETED"))
+                "DISBURSE_FUNDS_FINISHED", List.of(TransitionRule.of(null,"COMPLETED")),
+                "SEND_REJECTION_FINISHED",  List.of(TransitionRule.of(null,"COMPLETED"))
         ));
     }
 
@@ -97,19 +98,37 @@ public class DataInitializer implements CommandLineRunner {
     private void seedOrderFulfillment() {
         upsert("ORDER_FULFILLMENT", "VALIDATE_ORDER", Map.of(
                 "VALIDATE_ORDER_FINISHED", List.of(
-                        new TransitionRule(null, "RESERVE_INVENTORY")
+                        TransitionRule.of(null,"RESERVE_INVENTORY")
                 ),
                 "RESERVE_INVENTORY_FINISHED", List.of(
-                        new TransitionRule("#inventoryAvailable == true", "PROCESS_PAYMENT"),
-                        new TransitionRule(null, "NOTIFY_OUT_OF_STOCK")    // default branch
+                        TransitionRule.of("#inventoryAvailable == true", "PROCESS_PAYMENT"),
+                        TransitionRule.of(null,"NOTIFY_OUT_OF_STOCK")    // default branch
                 ),
                 "PROCESS_PAYMENT_FINISHED", List.of(
-                        new TransitionRule("#paymentSuccess == true", "SHIP_ORDER"),
-                        new TransitionRule(null, "NOTIFY_PAYMENT_FAILED")  // default branch
+                        TransitionRule.of("#paymentSuccess == true", "SHIP_ORDER"),
+                        TransitionRule.of(null,"NOTIFY_PAYMENT_FAILED")  // default branch
                 ),
-                "SHIP_ORDER_FINISHED",           List.of(new TransitionRule(null, "COMPLETED")),
-                "NOTIFY_OUT_OF_STOCK_FINISHED",  List.of(new TransitionRule(null, "COMPLETED")),
-                "NOTIFY_PAYMENT_FAILED_FINISHED", List.of(new TransitionRule(null, "COMPLETED"))
+                "SHIP_ORDER_FINISHED",           List.of(TransitionRule.of(null,"COMPLETED")),
+                "NOTIFY_OUT_OF_STOCK_FINISHED",  List.of(TransitionRule.of(null,"COMPLETED")),
+                "NOTIFY_PAYMENT_FAILED_FINISHED", List.of(TransitionRule.of(null,"COMPLETED"))
+        ));
+    }
+
+    // -------------------------------------------------------------------------
+    // PARALLEL_FLOW — demonstrates parallel fork / join (Phase 7)
+    // Features: fan-out to multiple steps, wait for all to complete, then join
+    //
+    // Flow:
+    //   PREPARE_APPLICATION → [VALIDATE_CREDIT ∥ VERIFY_IDENTITY] → APPROVE_LOAN → COMPLETED
+    // -------------------------------------------------------------------------
+    private void seedParallelFlow() {
+        upsert("PARALLEL_FLOW", "PREPARE_APPLICATION", Map.of(
+                "PREPARE_APPLICATION_FINISHED", List.of(
+                        TransitionRule.fork(
+                                List.of("VALIDATE_CREDIT", "VERIFY_IDENTITY"),
+                                "APPROVE_LOAN")
+                ),
+                "APPROVE_LOAN_FINISHED", List.of(TransitionRule.of(null, "COMPLETED"))
         ));
     }
 

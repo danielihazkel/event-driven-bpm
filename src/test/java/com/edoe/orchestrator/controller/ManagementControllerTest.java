@@ -40,7 +40,7 @@ class ManagementControllerTest {
 
     private ProcessDefinitionResponse sampleDefinition(String name) {
         return new ProcessDefinitionResponse(1L, name, "STEP_1",
-                Map.of("STEP_1_FINISHED", List.of(new TransitionRule(null, "COMPLETED"))),
+                Map.of("STEP_1_FINISHED", List.of(TransitionRule.of(null, "COMPLETED"))),
                 LocalDateTime.now(), LocalDateTime.now());
     }
 
@@ -61,7 +61,7 @@ class ManagementControllerTest {
     @Test
     void createDefinition_returns201() throws Exception {
         ProcessDefinitionRequest req = new ProcessDefinitionRequest("NEW_FLOW", "STEP_1",
-                Map.of("STEP_1_FINISHED", List.of(new TransitionRule(null, "COMPLETED"))));
+                Map.of("STEP_1_FINISHED", List.of(TransitionRule.of(null, "COMPLETED"))));
         when(managementService.createDefinition(any())).thenReturn(sampleDefinition("NEW_FLOW"));
 
         mockMvc.perform(post("/api/definitions")

@@ -77,7 +77,7 @@ class ManagementServiceTest {
     @Test
     void createDefinition_savesAndReturns() {
         ProcessDefinitionRequest req = new ProcessDefinitionRequest("NEW_FLOW", "STEP_1",
-                java.util.Map.of("STEP_1_FINISHED", List.of(new TransitionRule(null, "COMPLETED"))));
+                java.util.Map.of("STEP_1_FINISHED", List.of(TransitionRule.of(null, "COMPLETED"))));
         when(definitionRepository.existsByName("NEW_FLOW")).thenReturn(false);
         when(definitionRepository.save(any())).thenAnswer(inv -> inv.getArgument(0));
 

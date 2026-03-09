@@ -69,14 +69,17 @@ POST /start-flow
 | Dead Letter Queue | Failed Kafka messages are retried 3 times (1 s apart) then routed to `*.DLT` topics |
 | Step Timeouts | A scheduler marks steps `STALLED` if they stay `RUNNING` beyond the configured limit |
 | Conditional Transitions | Each transition can carry a SpEL condition; branches are evaluated top-to-bottom, first match wins |
+| Parallel Fork / Join | A single transition rule can fan out to N parallel steps; the engine waits for all to complete before advancing to the join step |
 
 ---
 
 ## Process Definitions
 
-A process definition declares the workflow graph. Each event type maps to an ordered list of **transition rules** (`condition` + `next`). Branches are evaluated top-to-bottom; the first whose condition matches is taken. A missing or null `condition` is an unconditional default (always matches).
+A process definition declares the workflow graph. Each event type maps to an ordered list of **transition rules**. There are two rule types:
 
-### Transition rule format
+### Single-next rule (conditional or unconditional)
+
+Branches are evaluated top-to-bottom; the first whose condition matches is taken. A missing or null `condition` is an unconditional default (always matches).
 
 ```json
 {
@@ -87,7 +90,21 @@ A process definition declares the workflow graph. Each event type maps to an ord
 }
 ```
 
-Conditions are [Spring Expression Language (SpEL)](https://docs.spring.io/spring-framework/docs/current/reference/html/core.html#expressions) expressions evaluated against the **merged process context**. Each context key is available as a SpEL variable using `#keyName`.
+Conditions use [Spring Expression Language (SpEL)](https://docs.spring.io/spring-framework/docs/current/reference/html/core.html#expressions) evaluated against the **merged process context**. Each context key is available as `#keyName`.
+
+### Fork rule (parallel fan-out)
+
+When a rule carries `parallel` instead of `next`, the engine dispatches all listed steps simultaneously, waits for every `*_FINISHED` event, then advances to `joinStep`.
+
+```json
+{
+  "PREPARE_FINISHED": [
+    { "parallel": ["VALIDATE_CREDIT", "VERIFY_IDENTITY"], "joinStep": "APPROVE_LOAN" }
+  ]
+}
+```
+
+Duplicate `*_FINISHED` events for an already-completed branch are ignored (idempotency is preserved per-branch).
 
 ### Linear example
 
@@ -124,11 +141,26 @@ Conditions are [Spring Expression Language (SpEL)](https://docs.spring.io/spring
 }
 ```
 
+### Parallel fork example
+
+```json
+{
+  "name": "PARALLEL_FLOW",
+  "initialStep": "PREPARE_APPLICATION",
+  "transitions": {
+    "PREPARE_APPLICATION_FINISHED": [
+      { "parallel": ["VALIDATE_CREDIT", "VERIFY_IDENTITY"], "joinStep": "APPROVE_LOAN" }
+    ],
+    "APPROVE_LOAN_FINISHED": [{ "next": "COMPLETED" }]
+  }
+}
+```
+
 ---
 
 ## Example Flows (seeded on startup)
 
-Three example flows are upserted into the database on every app startup. They always reflect the latest engine features. Use them to experiment without creating definitions manually.
+Four example flows are upserted into the database on every app startup. They always reflect the latest engine features. Use them to experiment without creating definitions manually.
 
 ### DEFAULT_FLOW
 
@@ -185,6 +217,21 @@ Start with happy-path data:
 curl -s -X POST http://localhost:8080/start-flow \
   -H "Content-Type: application/json" \
   -d '{"definitionName": "ORDER_FULFILLMENT", "initialData": {"inventoryAvailable": true, "paymentSuccess": true}}'
+```
+
+### PARALLEL_FLOW
+
+Demonstrates parallel fork / join. `PREPARE_APPLICATION` fans out to `VALIDATE_CREDIT` and `VERIFY_IDENTITY` simultaneously; the engine waits for both to complete before advancing to `APPROVE_LOAN`.
+
+```
+PREPARE_APPLICATION ─┬─→ VALIDATE_CREDIT ──┐
+                      └─→ VERIFY_IDENTITY ──┴─→ APPROVE_LOAN → COMPLETED
+```
+
+```bash
+curl -s -X POST http://localhost:8080/start-flow \
+  -H "Content-Type: application/json" \
+  -d '{"definitionName": "PARALLEL_FLOW", "initialData": {}}'
 ```
 
 ---
@@ -275,7 +322,7 @@ src/main/java/com/edoe/orchestrator/
 │   ├── ProcessDefinitionResponse.java
 │   ├── ProcessInstanceResponse.java
 │   ├── StartFlowRequest.java
-│   └── TransitionRule.java          # {condition, next} conditional branch
+│   └── TransitionRule.java          # {condition, next} or {parallel, joinStep} branch rule
 ├── entity/
 │   ├── OutboxEvent.java             # outbox_events table
 │   ├── ProcessDefinition.java       # process_definitions table
