@@ -36,16 +36,19 @@ import static org.mockito.Mockito.*;
 @ExtendWith(MockitoExtension.class)
 class ManagementServiceTest {
 
-    @Mock private ProcessDefinitionRepository definitionRepository;
-    @Mock private ProcessInstanceRepository instanceRepository;
-    @Mock private OutboxEventRepository outboxRepository;
-    @Mock private TransitionService transitionService;
+    @Mock
+    private ProcessDefinitionRepository definitionRepository;
+    @Mock
+    private ProcessInstanceRepository instanceRepository;
+    @Mock
+    private OutboxEventRepository outboxRepository;
+    @Mock
+    private TransitionService transitionService;
 
     private ManagementService managementService;
     private final ObjectMapper objectMapper = new ObjectMapper();
 
-    private static final String TRANSITIONS_JSON =
-            "{\"STEP_1_FINISHED\":[{\"next\":\"STEP_2\"}],\"STEP_2_FINISHED\":[{\"next\":\"COMPLETED\"}]}";
+    private static final String TRANSITIONS_JSON = "{\"STEP_1_FINISHED\":[{\"next\":\"STEP_2\"}],\"STEP_2_FINISHED\":[{\"next\":\"COMPLETED\"}]}";
 
     @BeforeEach
     void setUp() {
@@ -57,7 +60,8 @@ class ManagementServiceTest {
         return new ProcessDefinition(name, "STEP_1", TRANSITIONS_JSON);
     }
 
-    private ProcessInstance instance(UUID id, String definitionName, String step, ProcessStatus status) throws Exception {
+    private ProcessInstance instance(UUID id, String definitionName, String step, ProcessStatus status)
+            throws Exception {
         ProcessInstance inst = new ProcessInstance(definitionName, step, "{}", status);
         Field f = ProcessInstance.class.getDeclaredField("id");
         f.setAccessible(true);
@@ -78,7 +82,7 @@ class ManagementServiceTest {
     @Test
     void createDefinition_savesAndReturns() {
         ProcessDefinitionRequest req = new ProcessDefinitionRequest("NEW_FLOW", "STEP_1",
-                java.util.Map.of("STEP_1_FINISHED", List.of(TransitionRule.of(null, "COMPLETED"))));
+                java.util.Map.of("STEP_1_FINISHED", List.of(TransitionRule.of(null, "COMPLETED"))), Map.of());
         when(definitionRepository.existsByName("NEW_FLOW")).thenReturn(false);
         when(definitionRepository.save(any())).thenAnswer(inv -> inv.getArgument(0));
 
@@ -89,7 +93,7 @@ class ManagementServiceTest {
 
     @Test
     void createDefinition_throwsWhenAlreadyExists() {
-        ProcessDefinitionRequest req = new ProcessDefinitionRequest("EXISTING", "STEP_1", java.util.Map.of());
+        ProcessDefinitionRequest req = new ProcessDefinitionRequest("EXISTING", "STEP_1", java.util.Map.of(), Map.of());
         when(definitionRepository.existsByName("EXISTING")).thenReturn(true);
 
         assertThatThrownBy(() -> managementService.createDefinition(req))

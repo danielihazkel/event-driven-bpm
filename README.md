@@ -70,6 +70,8 @@ POST /start-flow
 | Step Timeouts | A scheduler marks steps `STALLED` if they stay `RUNNING` beyond the configured limit |
 | Conditional Transitions | Each transition can carry a SpEL condition; branches are evaluated top-to-bottom, first match wins |
 | Parallel Fork / Join | A single transition rule can fan out to N parallel steps; the engine waits for all to complete before advancing to the join step |
+| Human-in-the-loop (Signals) | Processes can be `SUSPENDED` to wait for external named signals via API, which evaluate transitions normally |
+| Saga Rollback / Compensation | Steps can map to compensation steps; on `<step>_FAILED` event, the engine will natively walk backwards and dispatch compensation commands |
 
 ---
 
@@ -105,6 +107,35 @@ When a rule carries `parallel` instead of `next`, the engine dispatches all list
 ```
 
 Duplicate `*_FINISHED` events for an already-completed branch are ignored (idempotency is preserved per-branch).
+
+### Suspend rule (Human-in-the-loop)
+
+When a rule carries `suspend: true`, the process stops at the next step and moves to `SUSPENDED` status. It waits for an external signal API call to resume.
+
+```json
+{
+  "VALIDATE_CREDIT_FINISHED": [
+    { "condition": "#creditScore > 700", "next": "AUTO_APPROVE" },
+    { "next": "MANUAL_REVIEW", "suspend": true }
+  ]
+}
+```
+
+### Compensations (Saga Rollback)
+
+Process Definitions can accept a `compensations` map. If a step fails with a `_FAILED` event (e.g., `CHARGE_PAYMENT_FAILED`), the engine automatically enters a compensating state and works backwards through the successfully completed steps, dispatching their corresponding mapped compensation tasks.
+
+```json
+{
+  "name": "PAYMENT_SAGA",
+  "initialStep": "RESERVE_INVENTORY",
+  "transitions": { ... },
+  "compensations": {
+    "RESERVE_INVENTORY": "UNDO_RESERVE_INVENTORY",
+    "CHARGE_PAYMENT": "REFUND_PAYMENT"
+  }
+}
+```
 
 ### Linear example
 
@@ -282,6 +313,7 @@ Possible `status` values: `RUNNING`, `COMPLETED`, `FAILED`, `SUSPENDED`, `STALLE
 | `POST` | `/api/processes/{id}/cancel` | Cancel a running or stalled instance |
 | `POST` | `/api/processes/{id}/retry` | Retry a failed or stalled instance |
 | `POST` | `/api/processes/{id}/advance` | Manually advance a stuck instance |
+| `POST` | `/api/processes/{id}/signal` | Injects a named signal event into a `SUSPENDED` process, resuming it from its current gate step |
 
 #### Metrics
 

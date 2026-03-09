@@ -42,8 +42,7 @@ class TransitionServiceTest {
     private TransitionService transitionService;
     private final ObjectMapper objectMapper = new ObjectMapper();
 
-    private static final String TRANSITIONS_JSON =
-            "{\"STEP_1_FINISHED\":[{\"next\":\"STEP_2\"}],\"STEP_2_FINISHED\":[{\"next\":\"COMPLETED\"}]}";
+    private static final String TRANSITIONS_JSON = "{\"STEP_1_FINISHED\":[{\"next\":\"STEP_2\"}],\"STEP_2_FINISHED\":[{\"next\":\"COMPLETED\"}]}";
 
     @BeforeEach
     void setUp() {
@@ -54,26 +53,36 @@ class TransitionServiceTest {
         return new ProcessDefinition(name, "STEP_1", TRANSITIONS_JSON);
     }
 
-    private ProcessInstance instanceWithId(UUID id, String step, ProcessStatus status, String contextJson) throws Exception {
-        ProcessInstance inst = new ProcessInstance("TEST_FLOW", step, contextJson, status);
+    private ProcessInstance instanceWithId(UUID id, String step, ProcessStatus status, String contextJson)
+            throws Exception {
+        return instanceWithIdAndDef(id, "TEST_FLOW", step, status, contextJson);
+    }
+
+    private ProcessInstance instanceWithIdAndDef(UUID id, String defName, String step, ProcessStatus status,
+            String contextJson) throws Exception {
+        ProcessInstance inst = new ProcessInstance(defName, step, contextJson, status);
         Field field = ProcessInstance.class.getDeclaredField("id");
         field.setAccessible(true);
         field.set(inst, id);
         return inst;
     }
 
-    // 1. startProcess saves with correct initial state and saves OutboxEvent for STEP_1
+    // 1. startProcess saves with correct initial state and saves OutboxEvent for
+    // STEP_1
     @Test
     void startProcess_savesInstanceAndCreatesOutboxEvent() {
         UUID id = UUID.randomUUID();
-        when(definitionRepository.findByName("USER_REGISTRATION")).thenReturn(Optional.of(definition("USER_REGISTRATION")));
+        when(definitionRepository.findByName("USER_REGISTRATION"))
+                .thenReturn(Optional.of(definition("USER_REGISTRATION")));
         when(repository.saveAndFlush(any())).thenAnswer(inv -> {
             ProcessInstance pi = inv.getArgument(0);
             try {
                 Field f = ProcessInstance.class.getDeclaredField("id");
                 f.setAccessible(true);
                 f.set(pi, id);
-            } catch (Exception e) { throw new RuntimeException(e); }
+            } catch (Exception e) {
+                throw new RuntimeException(e);
+            }
             return pi;
         });
 
@@ -95,7 +104,8 @@ class TransitionServiceTest {
         assertThat(outbox.getEventType()).isEqualTo("STEP_1");
     }
 
-    // 2. handleEvent STEP_1_FINISHED → transitions to STEP_2, saves OutboxEvent for STEP_2
+    // 2. handleEvent STEP_1_FINISHED → transitions to STEP_2, saves OutboxEvent for
+    // STEP_2
     @Test
     void handleEvent_step1Finished_transitionsToStep2() throws Exception {
         UUID id = UUID.randomUUID();
@@ -132,7 +142,8 @@ class TransitionServiceTest {
         verifyNoInteractions(outboxRepository);
     }
 
-    // 4. handleEvent duplicate — stale STEP_1_FINISHED when already on STEP_2 → silently ignored
+    // 4. handleEvent duplicate — stale STEP_1_FINISHED when already on STEP_2 →
+    // silently ignored
     @Test
     void handleEvent_staleEvent_ignored() throws Exception {
         UUID id = UUID.randomUUID();
@@ -200,7 +211,9 @@ class TransitionServiceTest {
                 Field f = ProcessInstance.class.getDeclaredField("id");
                 f.setAccessible(true);
                 f.set(pi, id);
-            } catch (Exception e) { throw new RuntimeException(e); }
+            } catch (Exception e) {
+                throw new RuntimeException(e);
+            }
             return pi;
         });
 
@@ -240,7 +253,8 @@ class TransitionServiceTest {
         assertThat(inst.getStatus()).isEqualTo(ProcessStatus.COMPLETED);
     }
 
-    // 11. handleEvent with a matching conditional branch routes to that branch's next step
+    // 11. handleEvent with a matching conditional branch routes to that branch's
+    // next step
     @Test
     void handleEvent_conditionalBranch_routesToMatchingNext() throws Exception {
         UUID id = UUID.randomUUID();
@@ -261,7 +275,8 @@ class TransitionServiceTest {
         assertThat(inst.getStatus()).isEqualTo(ProcessStatus.RUNNING);
     }
 
-    // 12. handleEvent with unmatched conditional branch falls through to unconditional default
+    // 12. handleEvent with unmatched conditional branch falls through to
+    // unconditional default
     @Test
     void handleEvent_conditionalBranch_fallsThroughToDefault() throws Exception {
         UUID id = UUID.randomUUID();
@@ -282,7 +297,8 @@ class TransitionServiceTest {
         assertThat(inst.getStatus()).isEqualTo(ProcessStatus.RUNNING);
     }
 
-    // 13. Fork rule fans out — sets PARALLEL_WAIT, saves N outbox events, sets parallelPending
+    // 13. Fork rule fans out — sets PARALLEL_WAIT, saves N outbox events, sets
+    // parallelPending
     @Test
     void handleEvent_forkRule_setsParallelWaitAndDispatchesBranches() throws Exception {
         UUID id = UUID.randomUUID();
@@ -308,7 +324,8 @@ class TransitionServiceTest {
         assertThat(dispatchedTypes).containsExactlyInAnyOrder("VALIDATE_CREDIT", "VERIFY_IDENTITY");
     }
 
-    // 14. First parallel branch completes — decrements pending, stays in PARALLEL_WAIT, no outbox
+    // 14. First parallel branch completes — decrements pending, stays in
+    // PARALLEL_WAIT, no outbox
     @Test
     void handleEvent_firstParallelBranch_decrementsAndWaits() throws Exception {
         UUID id = UUID.randomUUID();
@@ -326,7 +343,8 @@ class TransitionServiceTest {
         verifyNoInteractions(outboxRepository);
     }
 
-    // 15. Last parallel branch completes — transitions to joinStep, dispatches join outbox event
+    // 15. Last parallel branch completes — transitions to joinStep, dispatches join
+    // outbox event
     @Test
     void handleEvent_lastParallelBranch_transitionsToJoinStep() throws Exception {
         UUID id = UUID.randomUUID();
@@ -372,7 +390,8 @@ class TransitionServiceTest {
     @Test
     void handleEvent_suspendRule_setsStatusSuspendedAndNoOutbox() throws Exception {
         UUID id = UUID.randomUUID();
-        // Transition: VALIDATE_CREDIT_FINISHED → suspend at MANUAL_REVIEW when creditScore <= 700
+        // Transition: VALIDATE_CREDIT_FINISHED → suspend at MANUAL_REVIEW when
+        // creditScore <= 700
         String suspendTransitions = "{\"VALIDATE_CREDIT_FINISHED\":["
                 + "{\"condition\":\"#creditScore > 700\",\"next\":\"AUTO_APPROVE\"},"
                 + "{\"next\":\"MANUAL_REVIEW\",\"suspend\":true}"
@@ -427,7 +446,8 @@ class TransitionServiceTest {
                 .hasMessageContaining(id.toString());
     }
 
-    // 20. handleSignal merges signal data into existing context before evaluating conditions
+    // 20. handleSignal merges signal data into existing context before evaluating
+    // conditions
     @Test
     void handleSignal_mergesSignalDataIntoContext() throws Exception {
         UUID id = UUID.randomUUID();
@@ -452,5 +472,87 @@ class TransitionServiceTest {
         Map<String, Object> merged = objectMapper.readValue(inst.getContextData(), Map.class);
         assertThat(merged).containsEntry("loanAmount", 50000);
         assertThat(merged).containsEntry("approved", false);
+    }
+
+    // 21. handleEvent <step>_FAILED initiates compensation
+    @Test
+    void handleEvent_stepFailed_initiatesCompensation() throws Exception {
+        UUID id = UUID.randomUUID();
+        ProcessDefinition def = new ProcessDefinition("PAYMENT_SAGA", "RESERVE_INVENTORY", "{}");
+        def.setCompensationsJson("{\"RESERVE_INVENTORY\":\"UNDO_RESERVE_INVENTORY\"}");
+
+        // Instance is at CHARGE_PAYMENT, having already completed RESERVE_INVENTORY
+        ProcessInstance inst = instanceWithIdAndDef(id, "PAYMENT_SAGA", "CHARGE_PAYMENT", ProcessStatus.RUNNING, "{}");
+        inst.setCompletedSteps("[\"RESERVE_INVENTORY\"]");
+
+        when(repository.findById(id)).thenReturn(Optional.of(inst));
+        when(repository.saveAndFlush(any())).thenAnswer(inv -> inv.getArgument(0));
+        when(definitionRepository.findByName("PAYMENT_SAGA")).thenReturn(Optional.of(def));
+
+        transitionService.handleEvent(id.toString(), "CHARGE_PAYMENT_FAILED", Map.of("error", "payment declined"));
+
+        assertThat(inst.getCompensating()).isTrue();
+        assertThat(inst.getCurrentStep()).isEqualTo("UNDO_RESERVE_INVENTORY");
+        // The completed steps should have popped RESERVE_INVENTORY
+        assertThat(inst.getCompletedSteps()).isEqualTo("[]");
+
+        ArgumentCaptor<OutboxEvent> captor = ArgumentCaptor.forClass(OutboxEvent.class);
+        verify(outboxRepository).save(captor.capture());
+        assertThat(captor.getValue().getEventType()).isEqualTo("UNDO_RESERVE_INVENTORY");
+
+        @SuppressWarnings("unchecked")
+        Map<String, Object> merged = objectMapper.readValue(inst.getContextData(), Map.class);
+        assertThat(merged).containsEntry("error", "payment declined");
+    }
+
+    // 22. handleEvent compensation finish transitions to next compensation or fails
+    // process
+    @Test
+    void handleEvent_compensationFinished_completesRollbackAndFailsProcess() throws Exception {
+        UUID id = UUID.randomUUID();
+        ProcessDefinition def = new ProcessDefinition("PAYMENT_SAGA", "RESERVE_INVENTORY", "{}");
+        def.setCompensationsJson("{\"RESERVE_INVENTORY\":\"UNDO_RESERVE_INVENTORY\"}");
+
+        // Instance is currently compensating UNDO_RESERVE_INVENTORY, and completedSteps
+        // is empty
+        ProcessInstance inst = instanceWithIdAndDef(id, "PAYMENT_SAGA", "UNDO_RESERVE_INVENTORY", ProcessStatus.RUNNING,
+                "{}");
+        inst.setCompensating(true);
+        inst.setCompletedSteps("[]"); // no more steps to pop
+
+        when(repository.findById(id)).thenReturn(Optional.of(inst));
+        when(repository.saveAndFlush(any())).thenAnswer(inv -> inv.getArgument(0));
+        when(definitionRepository.findByName("PAYMENT_SAGA")).thenReturn(Optional.of(def));
+
+        transitionService.handleEvent(id.toString(), "UNDO_RESERVE_INVENTORY_FINISHED", Map.of());
+
+        // Process should become FAILED
+        assertThat(inst.getStatus()).isEqualTo(ProcessStatus.FAILED);
+        assertThat(inst.getCompletedAt()).isNotNull();
+
+        // no outbox events should be dispatched for a terminal state
+        verifyNoInteractions(outboxRepository);
+    }
+
+    // 23. step successfully completes and is added to completedSteps
+    @Test
+    void handleEvent_normalCompletion_addsToCompletedSteps() throws Exception {
+        UUID id = UUID.randomUUID();
+        ProcessDefinition def = new ProcessDefinition("PAYMENT_SAGA", "RESERVE_INVENTORY",
+                "{\"RESERVE_INVENTORY_FINISHED\":[{\"next\":\"CHARGE_PAYMENT\"}]}");
+        def.setCompensationsJson("{}");
+
+        ProcessInstance inst = instanceWithIdAndDef(id, "PAYMENT_SAGA", "RESERVE_INVENTORY", ProcessStatus.RUNNING,
+                "{}");
+        inst.setCompletedSteps("[]");
+
+        when(repository.findById(id)).thenReturn(Optional.of(inst));
+        when(repository.saveAndFlush(any())).thenAnswer(inv -> inv.getArgument(0));
+        when(definitionRepository.findByName("PAYMENT_SAGA")).thenReturn(Optional.of(def));
+
+        transitionService.handleEvent(id.toString(), "RESERVE_INVENTORY_FINISHED", Map.of());
+
+        assertThat(inst.getCompletedSteps()).isEqualTo("[\"RESERVE_INVENTORY\"]");
+        assertThat(inst.getCurrentStep()).isEqualTo("CHARGE_PAYMENT");
     }
 }

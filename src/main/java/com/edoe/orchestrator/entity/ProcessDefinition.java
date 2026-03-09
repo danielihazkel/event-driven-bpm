@@ -20,13 +20,17 @@ public class ProcessDefinition {
     @Column(name = "transitions_json", columnDefinition = "TEXT", nullable = false)
     private String transitionsJson;
 
+    @Column(name = "compensations_json", columnDefinition = "TEXT")
+    private String compensationsJson;
+
     @Column(name = "created_at", nullable = false)
     private LocalDateTime createdAt;
 
     @Column(name = "updated_at", nullable = false)
     private LocalDateTime updatedAt;
 
-    protected ProcessDefinition() {}
+    protected ProcessDefinition() {
+    }
 
     public ProcessDefinition(String name, String initialStep, String transitionsJson) {
         this.name = name;
@@ -36,15 +40,56 @@ public class ProcessDefinition {
         this.updatedAt = LocalDateTime.now();
     }
 
-    public Long getId() { return id; }
-    public String getName() { return name; }
-    public String getInitialStep() { return initialStep; }
-    public String getTransitionsJson() { return transitionsJson; }
-    public LocalDateTime getCreatedAt() { return createdAt; }
-    public LocalDateTime getUpdatedAt() { return updatedAt; }
+    public ProcessDefinition(String name, String initialStep, String transitionsJson, String compensationsJson) {
+        this(name, initialStep, transitionsJson);
+        this.compensationsJson = compensationsJson;
+    }
 
-    public void setName(String name) { this.name = name; }
-    public void setInitialStep(String initialStep) { this.initialStep = initialStep; }
-    public void setTransitionsJson(String transitionsJson) { this.transitionsJson = transitionsJson; }
-    public void setUpdatedAt(LocalDateTime updatedAt) { this.updatedAt = updatedAt; }
+    public Long getId() {
+        return id;
+    }
+
+    public String getName() {
+        return name;
+    }
+
+    public String getInitialStep() {
+        return initialStep;
+    }
+
+    public String getTransitionsJson() {
+        return transitionsJson;
+    }
+
+    public String getCompensationsJson() {
+        return compensationsJson;
+    }
+
+    public LocalDateTime getCreatedAt() {
+        return createdAt;
+    }
+
+    public LocalDateTime getUpdatedAt() {
+        return updatedAt;
+    }
+
+    public void setName(String name) {
+        this.name = name;
+    }
+
+    public void setInitialStep(String initialStep) {
+        this.initialStep = initialStep;
+    }
+
+    public void setTransitionsJson(String transitionsJson) {
+        this.transitionsJson = transitionsJson;
+    }
+
+    public void setCompensationsJson(String compensationsJson) {
+        this.compensationsJson = compensationsJson;
+    }
+
+    public void setUpdatedAt(LocalDateTime updatedAt) {
+        this.updatedAt = updatedAt;
+    }
 }

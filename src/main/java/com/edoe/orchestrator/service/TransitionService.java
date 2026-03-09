@@ -41,9 +41,9 @@ public class TransitionService {
     private final ExpressionParser spelParser = new SpelExpressionParser();
 
     public TransitionService(ProcessInstanceRepository repository,
-                             OutboxEventRepository outboxRepository,
-                             ProcessDefinitionRepository definitionRepository,
-                             ObjectMapper objectMapper) {
+            OutboxEventRepository outboxRepository,
+            ProcessDefinitionRepository definitionRepository,
+            ObjectMapper objectMapper) {
         this.repository = repository;
         this.outboxRepository = outboxRepository;
         this.definitionRepository = definitionRepository;
@@ -79,17 +79,46 @@ public class TransitionService {
 
         // Parallel wait: a branch from an active fork just completed
         if (PARALLEL_WAIT.equals(instance.getCurrentStep())) {
-            handleParallelBranchComplete(instance, eventType, outputData);
+            if (eventType.endsWith("_FAILED")) {
+                handleFailure(instance, outputData);
+            } else {
+                handleParallelBranchComplete(instance, eventType, outputData);
+            }
             return;
         }
 
-        // Normal path: idempotency check
         String expectedEvent = instance.getCurrentStep() + "_FINISHED";
+        String failedEvent = instance.getCurrentStep() + "_FAILED";
+
+        if (eventType.equals(failedEvent)) {
+            handleFailure(instance, outputData);
+            return;
+        }
+
+        if (instance.getCompensating() != null && instance.getCompensating()) {
+            if (eventType.equals(expectedEvent)) {
+                Map<String, Object> mergedData = mergeContext(instance.getContextData(), outputData);
+                executeNextCompensation(instance, mergedData);
+            } else if (eventType.equals(failedEvent)) {
+                instance.setStatus(ProcessStatus.FAILED);
+                instance.setCompletedAt(LocalDateTime.now());
+                repository.saveAndFlush(instance);
+            } else {
+                log.warn("Ignoring event {} for compensating process {} (step={})", eventType, processId,
+                        instance.getCurrentStep());
+            }
+            return;
+        }
+
         if (!eventType.equals(expectedEvent)) {
             log.warn("Ignoring stale/duplicate event {} for process {} (step={})",
                     eventType, processId, instance.getCurrentStep());
             return;
         }
+
+        List<String> steps = deserializeStringList(instance.getCompletedSteps());
+        steps.add(instance.getCurrentStep());
+        instance.setCompletedSteps(serializeStringList(steps));
 
         ProcessDefinition definition = definitionRepository.findByName(instance.getDefinitionName())
                 .orElseThrow(() -> new IllegalArgumentException("Unknown definition: " + instance.getDefinitionName()));
@@ -125,8 +154,10 @@ public class TransitionService {
 
     /**
      * Resumes a SUSPENDED process by injecting a named signal event.
-     * The signal is evaluated exactly like a worker *_FINISHED event — transition rules
-     * keyed on {@code signalEvent} are looked up and the first matching branch fires.
+     * The signal is evaluated exactly like a worker *_FINISHED event — transition
+     * rules
+     * keyed on {@code signalEvent} are looked up and the first matching branch
+     * fires.
      * Signal data is merged into the process context before condition evaluation.
      */
     @Transactional
@@ -143,6 +174,10 @@ public class TransitionService {
         ProcessDefinition definition = definitionRepository.findByName(instance.getDefinitionName())
                 .orElseThrow(() -> new IllegalArgumentException(
                         "Unknown definition: " + instance.getDefinitionName()));
+
+        List<String> steps = deserializeStringList(instance.getCompletedSteps());
+        steps.add(instance.getCurrentStep());
+        instance.setCompletedSteps(serializeStringList(steps));
 
         Map<String, List<TransitionRule>> transitions = deserializeTransitions(definition.getTransitionsJson());
         Map<String, Object> mergedData = mergeContext(instance.getContextData(), signalData);
@@ -202,7 +237,7 @@ public class TransitionService {
      * enqueues one outbox command per parallel branch.
      */
     private void dispatchFork(ProcessInstance instance, List<String> parallelSteps,
-                              String joinStep, Map<String, Object> context) {
+            String joinStep, Map<String, Object> context) {
         instance.setCurrentStep(PARALLEL_WAIT);
         instance.setParallelPending(parallelSteps.size());
         instance.setJoinStep(joinStep);
@@ -214,7 +249,8 @@ public class TransitionService {
         for (String step : parallelSteps) {
             outboxRepository.save(new OutboxEvent(instance.getId().toString(), step, contextJson));
         }
-        log.debug("Process {} forked into {} parallel branches: {}", instance.getId(), parallelSteps.size(), parallelSteps);
+        log.debug("Process {} forked into {} parallel branches: {}", instance.getId(), parallelSteps.size(),
+                parallelSteps);
     }
 
     /**
@@ -223,8 +259,8 @@ public class TransitionService {
      * last branch reports — transitions to the join step.
      */
     private void handleParallelBranchComplete(ProcessInstance instance,
-                                              String eventType,
-                                              Map<String, Object> outputData) {
+            String eventType,
+            Map<String, Object> outputData) {
         // Idempotency: ignore if this branch already reported
         List<String> completed = deserializeStringList(instance.getParallelCompleted());
         if (completed.contains(eventType)) {
@@ -259,14 +295,61 @@ public class TransitionService {
     }
 
     // -------------------------------------------------------------------------
+    // Compensation Execution
+    // -------------------------------------------------------------------------
+
+    private void handleFailure(ProcessInstance instance, Map<String, Object> outputData) {
+        log.info("Process {} failed at step {}, starting compensation", instance.getId(), instance.getCurrentStep());
+        instance.setCompensating(true);
+        Map<String, Object> mergedData = mergeContext(instance.getContextData(), outputData);
+        executeNextCompensation(instance, mergedData);
+    }
+
+    private void executeNextCompensation(ProcessInstance instance, Map<String, Object> contextData) {
+        List<String> completed = deserializeStringList(instance.getCompletedSteps());
+        ProcessDefinition definition = definitionRepository.findByName(instance.getDefinitionName())
+                .orElseThrow(() -> new IllegalArgumentException("Unknown definition: " + instance.getDefinitionName()));
+        Map<String, String> compensations = deserializeStringMap(definition.getCompensationsJson());
+
+        String contextJson = contextData != null ? serializeContext(contextData) : instance.getContextData();
+
+        while (!completed.isEmpty()) {
+            String step = completed.remove(completed.size() - 1);
+            String compStep = compensations.get(step);
+            if (compStep != null) {
+                instance.setCompletedSteps(serializeStringList(completed));
+                instance.setCurrentStep(compStep);
+                instance.setStepStartedAt(LocalDateTime.now());
+                instance.setContextData(contextJson);
+                repository.saveAndFlush(instance);
+                outboxRepository.save(new OutboxEvent(instance.getId().toString(), compStep, contextJson));
+                log.debug("Process {} dispatching compensation step {} for {}", instance.getId(), compStep, step);
+                return;
+            }
+        }
+
+        instance.setCompletedSteps(serializeStringList(completed));
+        instance.setContextData(contextJson);
+
+        // No more steps to compensate. Or there were none mapped.
+        // Terminal state is FAILED.
+        instance.setStatus(ProcessStatus.FAILED);
+        instance.setCompletedAt(LocalDateTime.now());
+        repository.saveAndFlush(instance);
+        log.info("Process {} compensation complete. Process is FAILED.", instance.getId());
+    }
+
+    // -------------------------------------------------------------------------
     // Helpers
     // -------------------------------------------------------------------------
 
     /**
-     * Evaluates branches top-to-bottom and returns the first matching {@link TransitionRule}.
+     * Evaluates branches top-to-bottom and returns the first matching
+     * {@link TransitionRule}.
      * A null or blank condition is an unconditional default (always matches).
      * Each context key is available in SpEL as {@code #keyName}.
-     * Returns {@code null} if no branch matches (treated as COMPLETED by the caller).
+     * Returns {@code null} if no branch matches (treated as COMPLETED by the
+     * caller).
      */
     private TransitionRule evaluateBranches(List<TransitionRule> rules, Map<String, Object> context) {
         StandardEvaluationContext evalContext = new StandardEvaluationContext();
@@ -293,7 +376,8 @@ public class TransitionService {
     private Map<String, List<TransitionRule>> deserializeTransitions(String transitionsJson) {
         try {
             return objectMapper.readValue(transitionsJson,
-                    new TypeReference<Map<String, List<TransitionRule>>>() {});
+                    new TypeReference<Map<String, List<TransitionRule>>>() {
+                    });
         } catch (JsonProcessingException e) {
             throw new RuntimeException("Failed to parse transitions JSON", e);
         }
@@ -303,7 +387,8 @@ public class TransitionService {
         Map<String, Object> merged = new HashMap<>();
         if (existingJson != null && !existingJson.isBlank()) {
             try {
-                merged.putAll(objectMapper.readValue(existingJson, new TypeReference<Map<String, Object>>() {}));
+                merged.putAll(objectMapper.readValue(existingJson, new TypeReference<Map<String, Object>>() {
+                }));
             } catch (JsonProcessingException e) {
                 log.warn("Failed to parse existing context data, starting fresh: {}", e.getMessage());
             }
@@ -323,9 +408,11 @@ public class TransitionService {
     }
 
     private List<String> deserializeStringList(String json) {
-        if (json == null || json.isBlank()) return new ArrayList<>();
+        if (json == null || json.isBlank())
+            return new ArrayList<>();
         try {
-            return objectMapper.readValue(json, new TypeReference<List<String>>() {});
+            return objectMapper.readValue(json, new TypeReference<List<String>>() {
+            });
         } catch (JsonProcessingException e) {
             return new ArrayList<>();
         }
@@ -336,6 +423,17 @@ public class TransitionService {
             return objectMapper.writeValueAsString(list);
         } catch (JsonProcessingException e) {
             throw new RuntimeException("Failed to serialize string list", e);
+        }
+    }
+
+    private Map<String, String> deserializeStringMap(String json) {
+        if (json == null || json.isBlank())
+            return Map.of();
+        try {
+            return objectMapper.readValue(json, new TypeReference<Map<String, String>>() {
+            });
+        } catch (JsonProcessingException e) {
+            throw new RuntimeException("Failed to deserialize string map", e);
         }
     }
 }

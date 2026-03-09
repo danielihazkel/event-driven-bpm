@@ -33,10 +33,10 @@ public class ManagementService {
     private final ObjectMapper objectMapper;
 
     public ManagementService(ProcessDefinitionRepository definitionRepository,
-                             ProcessInstanceRepository instanceRepository,
-                             OutboxEventRepository outboxRepository,
-                             TransitionService transitionService,
-                             ObjectMapper objectMapper) {
+            ProcessInstanceRepository instanceRepository,
+            OutboxEventRepository outboxRepository,
+            TransitionService transitionService,
+            ObjectMapper objectMapper) {
         this.definitionRepository = definitionRepository;
         this.instanceRepository = instanceRepository;
         this.outboxRepository = outboxRepository;
@@ -60,8 +60,8 @@ public class ManagementService {
         ProcessDefinition def = new ProcessDefinition(
                 request.name(),
                 request.initialStep(),
-                serializeTransitions(request.transitions())
-        );
+                serializeTransitions(request.transitions()),
+                serializeStringMap(request.compensations()));
         return toDefinitionResponse(definitionRepository.save(def));
     }
 
@@ -78,6 +78,7 @@ public class ManagementService {
         def.setName(request.name());
         def.setInitialStep(request.initialStep());
         def.setTransitionsJson(serializeTransitions(request.transitions()));
+        def.setCompensationsJson(serializeStringMap(request.compensations()));
         def.setUpdatedAt(LocalDateTime.now());
         return toDefinitionResponse(definitionRepository.save(def));
     }
@@ -182,8 +183,9 @@ public class ManagementService {
 
     private ProcessDefinitionResponse toDefinitionResponse(ProcessDefinition def) {
         Map<String, List<TransitionRule>> transitions = deserializeTransitions(def.getTransitionsJson());
+        Map<String, String> compensations = deserializeStringMap(def.getCompensationsJson());
         return new ProcessDefinitionResponse(def.getId(), def.getName(), def.getInitialStep(),
-                transitions, def.getCreatedAt(), def.getUpdatedAt());
+                transitions, compensations, def.getCreatedAt(), def.getUpdatedAt());
     }
 
     private ProcessInstanceResponse toInstanceResponse(ProcessInstance inst) {
@@ -202,9 +204,31 @@ public class ManagementService {
 
     private Map<String, List<TransitionRule>> deserializeTransitions(String json) {
         try {
-            return objectMapper.readValue(json, new TypeReference<Map<String, List<TransitionRule>>>() {});
+            return objectMapper.readValue(json, new TypeReference<Map<String, List<TransitionRule>>>() {
+            });
         } catch (JsonProcessingException e) {
             throw new RuntimeException("Failed to deserialize transitions", e);
+        }
+    }
+
+    private String serializeStringMap(Map<String, String> map) {
+        if (map == null)
+            return null;
+        try {
+            return objectMapper.writeValueAsString(map);
+        } catch (JsonProcessingException e) {
+            throw new RuntimeException("Failed to serialize string map", e);
+        }
+    }
+
+    private Map<String, String> deserializeStringMap(String json) {
+        if (json == null || json.isBlank())
+            return Map.of();
+        try {
+            return objectMapper.readValue(json, new TypeReference<Map<String, String>>() {
+            });
+        } catch (JsonProcessingException e) {
+            throw new RuntimeException("Failed to deserialize string map", e);
         }
     }
 }
