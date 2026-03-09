@@ -4,10 +4,10 @@ import com.edoe.orchestrator.config.KafkaTopicConfig;
 import com.edoe.orchestrator.dto.OrchestratorMessage;
 import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import lombok.RequiredArgsConstructor;
+import lombok.extern.slf4j.Slf4j;
 import org.apache.kafka.clients.producer.ProducerRecord;
 import org.apache.kafka.common.header.internals.RecordHeader;
-import org.slf4j.Logger;
-import org.slf4j.LoggerFactory;
 import org.springframework.kafka.core.KafkaTemplate;
 import org.springframework.stereotype.Service;
 
@@ -15,18 +15,13 @@ import java.util.Map;
 
 import static java.nio.charset.StandardCharsets.UTF_8;
 
+@Slf4j
+@RequiredArgsConstructor
 @Service
 public class CommandPublisherService {
 
-    private static final Logger log = LoggerFactory.getLogger(CommandPublisherService.class);
-
     private final KafkaTemplate<String, String> kafkaTemplate;
     private final ObjectMapper objectMapper;
-
-    public CommandPublisherService(KafkaTemplate<String, String> kafkaTemplate, ObjectMapper objectMapper) {
-        this.kafkaTemplate = kafkaTemplate;
-        this.objectMapper = objectMapper;
-    }
 
     public void publishCommand(String processId, String commandType, Map<String, Object> data) {
         OrchestratorMessage message = new OrchestratorMessage(processId, commandType, data);

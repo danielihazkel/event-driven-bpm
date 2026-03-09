@@ -1,9 +1,17 @@
 package com.edoe.orchestrator.entity;
 
 import jakarta.persistence.*;
+import lombok.AccessLevel;
+import lombok.Getter;
+import lombok.NoArgsConstructor;
+import lombok.Setter;
+
 import java.time.LocalDateTime;
 import java.util.UUID;
 
+@Getter
+@Setter
+@NoArgsConstructor(access = AccessLevel.PROTECTED)
 @Entity
 @Table(name = "process_instances")
 public class ProcessInstance {
@@ -78,9 +86,6 @@ public class ProcessInstance {
     @Column(name = "parallel_completed", columnDefinition = "TEXT")
     private String parallelCompleted;
 
-    protected ProcessInstance() {
-    }
-
     public ProcessInstance(String definitionName, String currentStep, String contextData, ProcessStatus status) {
         this.definitionName = definitionName;
         this.currentStep = currentStep;
@@ -88,121 +93,5 @@ public class ProcessInstance {
         this.status = status;
         this.createdAt = LocalDateTime.now();
         this.stepStartedAt = LocalDateTime.now();
-    }
-
-    public UUID getId() {
-        return id;
-    }
-
-    public String getDefinitionName() {
-        return definitionName;
-    }
-
-    public String getCurrentStep() {
-        return currentStep;
-    }
-
-    public String getContextData() {
-        return contextData;
-    }
-
-    public ProcessStatus getStatus() {
-        return status;
-    }
-
-    public LocalDateTime getCreatedAt() {
-        return createdAt;
-    }
-
-    public LocalDateTime getStepStartedAt() {
-        return stepStartedAt;
-    }
-
-    public LocalDateTime getCompletedAt() {
-        return completedAt;
-    }
-
-    public LocalDateTime getWakeAt() {
-        return wakeAt;
-    }
-
-    public void setWakeAt(LocalDateTime wakeAt) {
-        this.wakeAt = wakeAt;
-    }
-
-    public UUID getParentProcessId() {
-        return parentProcessId;
-    }
-
-    public void setParentProcessId(UUID parentProcessId) {
-        this.parentProcessId = parentProcessId;
-    }
-
-    public String getParentNextStep() {
-        return parentNextStep;
-    }
-
-    public void setParentNextStep(String parentNextStep) {
-        this.parentNextStep = parentNextStep;
-    }
-
-    public Integer getParallelPending() {
-        return parallelPending;
-    }
-
-    public String getJoinStep() {
-        return joinStep;
-    }
-
-    public String getParallelCompleted() {
-        return parallelCompleted;
-    }
-
-    public Boolean getCompensating() {
-        return compensating;
-    }
-
-    public String getCompletedSteps() {
-        return completedSteps;
-    }
-
-    public void setCurrentStep(String currentStep) {
-        this.currentStep = currentStep;
-    }
-
-    public void setContextData(String contextData) {
-        this.contextData = contextData;
-    }
-
-    public void setStatus(ProcessStatus status) {
-        this.status = status;
-    }
-
-    public void setStepStartedAt(LocalDateTime stepStartedAt) {
-        this.stepStartedAt = stepStartedAt;
-    }
-
-    public void setCompletedAt(LocalDateTime completedAt) {
-        this.completedAt = completedAt;
-    }
-
-    public void setParallelPending(Integer parallelPending) {
-        this.parallelPending = parallelPending;
-    }
-
-    public void setJoinStep(String joinStep) {
-        this.joinStep = joinStep;
-    }
-
-    public void setParallelCompleted(String parallelCompleted) {
-        this.parallelCompleted = parallelCompleted;
-    }
-
-    public void setCompensating(Boolean compensating) {
-        this.compensating = compensating;
-    }
-
-    public void setCompletedSteps(String completedSteps) {
-        this.completedSteps = completedSteps;
     }
 }

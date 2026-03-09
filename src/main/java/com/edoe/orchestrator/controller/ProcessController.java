@@ -7,23 +7,20 @@ import io.swagger.v3.oas.annotations.Operation;
 import io.swagger.v3.oas.annotations.responses.ApiResponse;
 import io.swagger.v3.oas.annotations.responses.ApiResponses;
 import io.swagger.v3.oas.annotations.tags.Tag;
+import lombok.RequiredArgsConstructor;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.*;
 
 import java.util.Map;
 import java.util.UUID;
 
+@RequiredArgsConstructor
 @RestController
 @Tag(name = "Process Execution", description = "APIs for executing and checking the status of individual process flows")
 public class ProcessController {
 
     private final TransitionService transitionService;
     private final ProcessInstanceRepository repository;
-
-    public ProcessController(TransitionService transitionService, ProcessInstanceRepository repository) {
-        this.transitionService = transitionService;
-        this.repository = repository;
-    }
 
     @Operation(summary = "Start a new process flow", description = "Instantiates a new process based on the given definition name and initial data")
     @ApiResponses(value = {

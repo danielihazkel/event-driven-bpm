@@ -1,15 +1,13 @@
 package com.edoe.orchestrator.worker;
 
-import org.slf4j.Logger;
-import org.slf4j.LoggerFactory;
+import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Component;
 
 import java.util.Map;
 
+@Slf4j
 @Component
 public class StepOneWorkerTask implements WorkerTask {
-
-    private static final Logger log = LoggerFactory.getLogger(StepOneWorkerTask.class);
 
     @Override
     public String taskType() {

@@ -5,8 +5,8 @@ import com.edoe.orchestrator.entity.ProcessDefinition;
 import com.edoe.orchestrator.repository.ProcessDefinitionRepository;
 import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.databind.ObjectMapper;
-import org.slf4j.Logger;
-import org.slf4j.LoggerFactory;
+import lombok.RequiredArgsConstructor;
+import lombok.extern.slf4j.Slf4j;
 import org.springframework.boot.CommandLineRunner;
 import org.springframework.stereotype.Component;
 
@@ -25,18 +25,13 @@ import java.util.Optional;
  * When a new engine feature is added, update the relevant flow (or add a new
  * one) here.
  */
+@Slf4j
+@RequiredArgsConstructor
 @Component
 public class DataInitializer implements CommandLineRunner {
 
-    private static final Logger log = LoggerFactory.getLogger(DataInitializer.class);
-
     private final ProcessDefinitionRepository definitionRepository;
     private final ObjectMapper objectMapper;
-
-    public DataInitializer(ProcessDefinitionRepository definitionRepository, ObjectMapper objectMapper) {
-        this.definitionRepository = definitionRepository;
-        this.objectMapper = objectMapper;
-    }
 
     @Override
     public void run(String... args) {

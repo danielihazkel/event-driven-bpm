@@ -5,8 +5,8 @@ import com.edoe.orchestrator.entity.ProcessInstance;
 import com.edoe.orchestrator.entity.ProcessStatus;
 import com.edoe.orchestrator.repository.OutboxEventRepository;
 import com.edoe.orchestrator.repository.ProcessInstanceRepository;
-import org.slf4j.Logger;
-import org.slf4j.LoggerFactory;
+import lombok.RequiredArgsConstructor;
+import lombok.extern.slf4j.Slf4j;
 import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
@@ -21,18 +21,13 @@ import java.util.List;
  * <p>Scheduling interval is configurable via
  * {@code edoe.orchestrator.timer-poll-interval-ms} (default 5 000 ms).</p>
  */
+@Slf4j
+@RequiredArgsConstructor
 @Service
 public class TimerService {
 
-    private static final Logger log = LoggerFactory.getLogger(TimerService.class);
-
     private final ProcessInstanceRepository instanceRepository;
     private final OutboxEventRepository outboxRepository;
-
-    public TimerService(ProcessInstanceRepository instanceRepository, OutboxEventRepository outboxRepository) {
-        this.instanceRepository = instanceRepository;
-        this.outboxRepository = outboxRepository;
-    }
 
     @Scheduled(fixedDelayString = "${edoe.orchestrator.timer-poll-interval-ms:5000}")
     @Transactional

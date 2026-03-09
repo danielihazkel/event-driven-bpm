@@ -1,9 +1,17 @@
 package com.edoe.orchestrator.entity;
 
 import jakarta.persistence.*;
+import lombok.AccessLevel;
+import lombok.Getter;
+import lombok.NoArgsConstructor;
+import lombok.Setter;
+
 import java.time.LocalDateTime;
 import java.util.UUID;
 
+@Getter
+@Setter
+@NoArgsConstructor(access = AccessLevel.PROTECTED)
 @Entity
 @Table(name = "outbox_events")
 public class OutboxEvent {
@@ -30,23 +38,10 @@ public class OutboxEvent {
     @Column(name = "published_at")
     private LocalDateTime publishedAt;
 
-    protected OutboxEvent() {}
-
     public OutboxEvent(String aggregateId, String eventType, String payload) {
         this.aggregateId = aggregateId;
         this.eventType = eventType;
         this.payload = payload;
         this.createdAt = LocalDateTime.now();
     }
-
-    public UUID getId() { return id; }
-    public String getAggregateId() { return aggregateId; }
-    public String getEventType() { return eventType; }
-    public String getPayload() { return payload; }
-    public boolean isPublished() { return published; }
-    public LocalDateTime getCreatedAt() { return createdAt; }
-    public LocalDateTime getPublishedAt() { return publishedAt; }
-
-    public void setPublished(boolean published) { this.published = published; }
-    public void setPublishedAt(LocalDateTime publishedAt) { this.publishedAt = publishedAt; }
 }

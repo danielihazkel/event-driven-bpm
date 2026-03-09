@@ -11,6 +11,7 @@ import com.edoe.orchestrator.repository.ProcessInstanceRepository;
 import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.core.type.TypeReference;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import lombok.RequiredArgsConstructor;
 import org.springframework.data.domain.Page;
 import org.springframework.data.domain.Pageable;
 import org.springframework.stereotype.Service;
@@ -23,6 +24,7 @@ import java.util.NoSuchElementException;
 import java.util.Set;
 import java.util.UUID;
 
+@RequiredArgsConstructor
 @Service
 public class ManagementService {
 
@@ -31,18 +33,6 @@ public class ManagementService {
     private final OutboxEventRepository outboxRepository;
     private final TransitionService transitionService;
     private final ObjectMapper objectMapper;
-
-    public ManagementService(ProcessDefinitionRepository definitionRepository,
-            ProcessInstanceRepository instanceRepository,
-            OutboxEventRepository outboxRepository,
-            TransitionService transitionService,
-            ObjectMapper objectMapper) {
-        this.definitionRepository = definitionRepository;
-        this.instanceRepository = instanceRepository;
-        this.outboxRepository = outboxRepository;
-        this.transitionService = transitionService;
-        this.objectMapper = objectMapper;
-    }
 
     // --- Process Definitions ---
 

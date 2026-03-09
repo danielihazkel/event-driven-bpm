@@ -11,8 +11,8 @@ import com.edoe.orchestrator.repository.ProcessInstanceRepository;
 import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.core.type.TypeReference;
 import com.fasterxml.jackson.databind.ObjectMapper;
-import org.slf4j.Logger;
-import org.slf4j.LoggerFactory;
+import lombok.RequiredArgsConstructor;
+import lombok.extern.slf4j.Slf4j;
 import org.springframework.expression.EvaluationException;
 import org.springframework.expression.ExpressionParser;
 import org.springframework.expression.spel.standard.SpelExpressionParser;
@@ -27,10 +27,11 @@ import java.util.List;
 import java.util.Map;
 import java.util.UUID;
 
+@Slf4j
+@RequiredArgsConstructor
 @Service
 public class TransitionService {
 
-    private static final Logger log = LoggerFactory.getLogger(TransitionService.class);
     private static final String COMPLETED_SENTINEL = "COMPLETED";
     private static final String PARALLEL_WAIT = "PARALLEL_WAIT";
 
@@ -39,16 +40,6 @@ public class TransitionService {
     private final ProcessDefinitionRepository definitionRepository;
     private final ObjectMapper objectMapper;
     private final ExpressionParser spelParser = new SpelExpressionParser();
-
-    public TransitionService(ProcessInstanceRepository repository,
-            OutboxEventRepository outboxRepository,
-            ProcessDefinitionRepository definitionRepository,
-            ObjectMapper objectMapper) {
-        this.repository = repository;
-        this.outboxRepository = outboxRepository;
-        this.definitionRepository = definitionRepository;
-        this.objectMapper = objectMapper;
-    }
 
     @Transactional
     public UUID startProcess(String definitionName, Map<String, Object> initialData) {

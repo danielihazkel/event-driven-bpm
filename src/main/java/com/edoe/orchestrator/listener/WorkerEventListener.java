@@ -5,27 +5,22 @@ import com.edoe.orchestrator.dto.OrchestratorMessage;
 import com.edoe.orchestrator.service.TransitionService;
 import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import lombok.RequiredArgsConstructor;
+import lombok.extern.slf4j.Slf4j;
 import org.apache.kafka.clients.consumer.ConsumerRecord;
 import org.apache.kafka.common.header.Header;
-import org.slf4j.Logger;
-import org.slf4j.LoggerFactory;
 import org.springframework.kafka.annotation.KafkaListener;
 import org.springframework.stereotype.Component;
 
 import static java.nio.charset.StandardCharsets.UTF_8;
 
+@Slf4j
+@RequiredArgsConstructor
 @Component
 public class WorkerEventListener {
 
-    private static final Logger log = LoggerFactory.getLogger(WorkerEventListener.class);
-
     private final TransitionService transitionService;
     private final ObjectMapper objectMapper;
-
-    public WorkerEventListener(TransitionService transitionService, ObjectMapper objectMapper) {
-        this.transitionService = transitionService;
-        this.objectMapper = objectMapper;
-    }
 
     @KafkaListener(
             topics = KafkaTopicConfig.WORKER_EVENTS_TOPIC,

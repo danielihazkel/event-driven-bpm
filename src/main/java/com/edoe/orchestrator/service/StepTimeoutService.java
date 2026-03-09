@@ -3,8 +3,7 @@ package com.edoe.orchestrator.service;
 import com.edoe.orchestrator.entity.ProcessInstance;
 import com.edoe.orchestrator.entity.ProcessStatus;
 import com.edoe.orchestrator.repository.ProcessInstanceRepository;
-import org.slf4j.Logger;
-import org.slf4j.LoggerFactory;
+import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.stereotype.Service;
@@ -13,10 +12,9 @@ import org.springframework.transaction.annotation.Transactional;
 import java.time.LocalDateTime;
 import java.util.List;
 
+@Slf4j
 @Service
 public class StepTimeoutService {
-
-    private static final Logger log = LoggerFactory.getLogger(StepTimeoutService.class);
 
     private final ProcessInstanceRepository repository;
     private final long stepTimeoutMinutes;

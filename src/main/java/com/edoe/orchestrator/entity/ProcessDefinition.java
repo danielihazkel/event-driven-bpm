@@ -1,8 +1,16 @@
 package com.edoe.orchestrator.entity;
 
 import jakarta.persistence.*;
+import lombok.AccessLevel;
+import lombok.Getter;
+import lombok.NoArgsConstructor;
+import lombok.Setter;
+
 import java.time.LocalDateTime;
 
+@Getter
+@Setter
+@NoArgsConstructor(access = AccessLevel.PROTECTED)
 @Entity
 @Table(name = "process_definitions")
 public class ProcessDefinition {
@@ -29,9 +37,6 @@ public class ProcessDefinition {
     @Column(name = "updated_at", nullable = false)
     private LocalDateTime updatedAt;
 
-    protected ProcessDefinition() {
-    }
-
     public ProcessDefinition(String name, String initialStep, String transitionsJson) {
         this.name = name;
         this.initialStep = initialStep;
@@ -45,51 +50,4 @@ public class ProcessDefinition {
         this.compensationsJson = compensationsJson;
     }
 
-    public Long getId() {
-        return id;
-    }
-
-    public String getName() {
-        return name;
-    }
-
-    public String getInitialStep() {
-        return initialStep;
-    }
-
-    public String getTransitionsJson() {
-        return transitionsJson;
-    }
-
-    public String getCompensationsJson() {
-        return compensationsJson;
-    }
-
-    public LocalDateTime getCreatedAt() {
-        return createdAt;
-    }
-
-    public LocalDateTime getUpdatedAt() {
-        return updatedAt;
-    }
-
-    public void setName(String name) {
-        this.name = name;
-    }
-
-    public void setInitialStep(String initialStep) {
-        this.initialStep = initialStep;
-    }
-
-    public void setTransitionsJson(String transitionsJson) {
-        this.transitionsJson = transitionsJson;
-    }
-
-    public void setCompensationsJson(String compensationsJson) {
-        this.compensationsJson = compensationsJson;
-    }
-
-    public void setUpdatedAt(LocalDateTime updatedAt) {
-        this.updatedAt = updatedAt;
-    }
 }
