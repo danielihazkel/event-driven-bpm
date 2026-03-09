@@ -152,13 +152,13 @@ Conditions use **Spring Expression Language (SpEL)** and are evaluated against t
 * [x] **Timeout Integration:** `StepTimeoutService` must skip `SUSPENDED` processes (they are intentionally waiting, not stalled).
 * [x] **Updated Seeded Example:** Update `LOAN_APPROVAL` so `MANUAL_REVIEW` suspends the process until a loan-officer signal arrives.
 
-### Phase 9: Compensation / Saga Rollback
+### Phase 9: Compensation / Saga Rollback ✅
 
-* [ ] **Compensation Map:** `ProcessDefinition` gains an optional `compensations` field — a `Map<String, String>` of `step → compensating_step` (e.g., `"RESERVE_INVENTORY" → "UNDO_RESERVE_INVENTORY"`).
-* [ ] **Failure Path:** When a `*_FAILED` event is received, instead of moving to `FAILED`, the engine enters a compensation loop: walks back through `completedSteps` in reverse and dispatches each compensating command.
-* [ ] **Compensation Tracking:** `ProcessInstance` gains `compensating` (Boolean) and `completedSteps` (JSON array) columns to track saga rollback progress.
-* [ ] **Terminal States:** After all compensations complete, the process moves to `FAILED` (partial / unrecoverable) or `CANCELLED` (fully rolled back).
-* [ ] **Updated Seeded Example:** Add a `PAYMENT_SAGA` flow that demonstrates full rollback: `RESERVE_INVENTORY → CHARGE_PAYMENT → SHIP_ORDER`, with compensations for each step.
+* [x] **Compensation Map:** `ProcessDefinition` gains an optional `compensations` field — a `Map<String, String>` of `step → compensating_step` (e.g., `"RESERVE_INVENTORY" → "UNDO_RESERVE_INVENTORY"`).
+* [x] **Failure Path:** When a `*_FAILED` event is received, instead of moving to `FAILED`, the engine enters a compensation loop: walks back through `completedSteps` in reverse and dispatches each compensating command.
+* [x] **Compensation Tracking:** `ProcessInstance` gains `compensating` (Boolean) and `completedSteps` (JSON array) columns to track saga rollback progress.
+* [x] **Terminal States:** After all compensations complete, the process moves to `FAILED` (partial / unrecoverable) or `CANCELLED` (fully rolled back).
+* [x] **Updated Seeded Example:** Add a `PAYMENT_SAGA` flow that demonstrates full rollback: `RESERVE_INVENTORY → CHARGE_PAYMENT → SHIP_ORDER`, with compensations for each step.
 
 ---
 
