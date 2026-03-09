@@ -46,6 +46,8 @@ public class DataInitializer implements CommandLineRunner {
         seedParallelFlow();
         seedPaymentSaga();
         seedDelayFlow();
+        seedCreditCheckSub();
+        seedSubProcessFlow();
     }
 
     // -------------------------------------------------------------------------
@@ -167,6 +169,33 @@ public class DataInitializer implements CommandLineRunner {
         upsert("DELAY_FLOW", "PREPARE_REQUEST", Map.of(
                 "PREPARE_REQUEST_FINISHED", List.of(TransitionRule.delay(3000L, "PROCESS_REQUEST")),
                 "PROCESS_REQUEST_FINISHED", List.of(TransitionRule.of(null, "COMPLETED"))));
+    }
+
+    // -------------------------------------------------------------------------
+    // CREDIT_CHECK_SUB — child definition used by SUB_PROCESS_FLOW (Phase 10)
+    // Features: standalone sub-process invoked as a call activity
+    //
+    // Flow:
+    // FETCH_CREDIT_REPORT → EVALUATE_SCORE → COMPLETED
+    // -------------------------------------------------------------------------
+    private void seedCreditCheckSub() {
+        upsert("CREDIT_CHECK_SUB", "FETCH_CREDIT_REPORT", Map.of(
+                "FETCH_CREDIT_REPORT_FINISHED", List.of(TransitionRule.of(null, "EVALUATE_SCORE")),
+                "EVALUATE_SCORE_FINISHED", List.of(TransitionRule.of(null, "COMPLETED"))));
+    }
+
+    // -------------------------------------------------------------------------
+    // SUB_PROCESS_FLOW — demonstrates sub-process / call activity (Phase 10)
+    // Features: callActivity rule spawns CREDIT_CHECK_SUB, parent waits
+    //
+    // Flow:
+    // COLLECT_APPLICATION → callActivity(CREDIT_CHECK_SUB) → MAKE_DECISION → COMPLETED
+    // -------------------------------------------------------------------------
+    private void seedSubProcessFlow() {
+        upsert("SUB_PROCESS_FLOW", "COLLECT_APPLICATION", Map.of(
+                "COLLECT_APPLICATION_FINISHED", List.of(
+                        TransitionRule.callActivity(null, "CREDIT_CHECK_SUB", "MAKE_DECISION")),
+                "MAKE_DECISION_FINISHED", List.of(TransitionRule.of(null, "COMPLETED"))));
     }
 
     // -------------------------------------------------------------------------

@@ -88,7 +88,7 @@ public class ManagementService {
         ProcessDefinition def = definitionRepository.findByName(name)
                 .orElseThrow(() -> new NoSuchElementException("Definition not found: " + name));
         boolean hasActive = instanceRepository.existsByDefinitionNameAndStatusIn(
-                name, Set.of(ProcessStatus.RUNNING, ProcessStatus.STALLED));
+                name, Set.of(ProcessStatus.RUNNING, ProcessStatus.STALLED, ProcessStatus.WAITING_FOR_CHILD));
         if (hasActive) {
             throw new IllegalStateException("Cannot delete definition with active processes: " + name);
         }
@@ -118,13 +118,28 @@ public class ManagementService {
         if (instance.getStatus() != ProcessStatus.RUNNING
                 && instance.getStatus() != ProcessStatus.STALLED
                 && instance.getStatus() != ProcessStatus.SUSPENDED
-                && instance.getStatus() != ProcessStatus.SCHEDULED) {
+                && instance.getStatus() != ProcessStatus.SCHEDULED
+                && instance.getStatus() != ProcessStatus.WAITING_FOR_CHILD) {
             throw new IllegalStateException("Cannot cancel process in status: " + instance.getStatus());
         }
         instance.setStatus(ProcessStatus.CANCELLED);
         instance.setWakeAt(null);
         instance.setCompletedAt(LocalDateTime.now());
-        return toInstanceResponse(instanceRepository.saveAndFlush(instance));
+        instanceRepository.saveAndFlush(instance);
+
+        // Cascade cancel to any running child processes
+        for (ProcessInstance child : instanceRepository.findByParentProcessId(id)) {
+            if (child.getStatus() == ProcessStatus.RUNNING
+                    || child.getStatus() == ProcessStatus.SCHEDULED
+                    || child.getStatus() == ProcessStatus.SUSPENDED
+                    || child.getStatus() == ProcessStatus.WAITING_FOR_CHILD) {
+                child.setStatus(ProcessStatus.CANCELLED);
+                child.setCompletedAt(LocalDateTime.now());
+                instanceRepository.saveAndFlush(child);
+            }
+        }
+
+        return toInstanceResponse(instance);
     }
 
     @Transactional
@@ -191,10 +206,11 @@ public class ManagementService {
         long stalled = instanceRepository.countByStatus(ProcessStatus.STALLED);
         long cancelled = instanceRepository.countByStatus(ProcessStatus.CANCELLED);
         long scheduled = instanceRepository.countByStatus(ProcessStatus.SCHEDULED);
-        long total = running + completed + failed + stalled + cancelled + scheduled;
+        long waitingForChild = instanceRepository.countByStatus(ProcessStatus.WAITING_FOR_CHILD);
+        long total = running + completed + failed + stalled + cancelled + scheduled + waitingForChild;
         long denominator = completed + failed + cancelled;
         double successRate = denominator > 0 ? (double) completed / denominator : 0.0;
-        return new MetricsSummaryResponse(total, running, completed, failed, stalled, cancelled, scheduled, successRate);
+        return new MetricsSummaryResponse(total, running, completed, failed, stalled, cancelled, scheduled, waitingForChild, successRate);
     }
 
     // --- Mapping helpers ---
@@ -209,7 +225,7 @@ public class ManagementService {
     private ProcessInstanceResponse toInstanceResponse(ProcessInstance inst) {
         return new ProcessInstanceResponse(inst.getId(), inst.getDefinitionName(), inst.getCurrentStep(),
                 inst.getStatus(), inst.getCreatedAt(), inst.getStepStartedAt(),
-                inst.getCompletedAt(), inst.getContextData());
+                inst.getCompletedAt(), inst.getContextData(), inst.getParentProcessId());
     }
 
     private String serializeTransitions(Map<String, List<TransitionRule>> transitions) {

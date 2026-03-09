@@ -136,14 +136,12 @@ public class TransitionService {
             suspendProcess(instance, matched.next(), mergedData);
         } else if (matched != null && matched.isDelay()) {
             scheduleProcess(instance, matched.next(), matched.delayMs(), mergedData);
+        } else if (matched != null && matched.isCallActivityRule()) {
+            startChildProcess(instance, matched.callActivity(), matched.next(), mergedData);
         } else {
             String nextStep = (matched == null) ? COMPLETED_SENTINEL : matched.next();
             if (COMPLETED_SENTINEL.equals(nextStep)) {
-                instance.setCurrentStep(COMPLETED_SENTINEL);
-                instance.setStatus(ProcessStatus.COMPLETED);
-                instance.setCompletedAt(LocalDateTime.now());
-                repository.saveAndFlush(instance);
-                log.debug("Process {} completed", processId);
+                completeProcess(instance);
             } else {
                 instance.setCurrentStep(nextStep);
                 instance.setStepStartedAt(LocalDateTime.now());
@@ -193,14 +191,14 @@ public class TransitionService {
             dispatchFork(instance, matched.parallel(), matched.joinStep(), mergedData);
         } else if (matched != null && matched.isSuspendGate()) {
             suspendProcess(instance, matched.next(), mergedData);
+        } else if (matched != null && matched.isCallActivityRule()) {
+            instance.setStatus(ProcessStatus.RUNNING);
+            startChildProcess(instance, matched.callActivity(), matched.next(), mergedData);
         } else {
             String nextStep = (matched == null) ? COMPLETED_SENTINEL : matched.next();
             if (COMPLETED_SENTINEL.equals(nextStep)) {
-                instance.setCurrentStep(COMPLETED_SENTINEL);
                 instance.setStatus(ProcessStatus.COMPLETED);
-                instance.setCompletedAt(LocalDateTime.now());
-                repository.saveAndFlush(instance);
-                log.debug("Process {} completed via signal {}", processId, signalEvent);
+                completeProcess(instance);
             } else {
                 instance.setCurrentStep(nextStep);
                 instance.setStatus(ProcessStatus.RUNNING);
@@ -360,6 +358,126 @@ public class TransitionService {
         instance.setCompletedAt(LocalDateTime.now());
         repository.saveAndFlush(instance);
         log.info("Process {} compensation complete. Process is FAILED.", instance.getId());
+
+        // Propagate failure to parent if this is a child process
+        if (instance.getParentProcessId() != null) {
+            failParentProcess(instance);
+        }
+    }
+
+    // -------------------------------------------------------------------------
+    // Sub-Process / Call Activity
+    // -------------------------------------------------------------------------
+
+    /**
+     * Completes a process and propagates to the parent if this is a child.
+     */
+    private void completeProcess(ProcessInstance instance) {
+        instance.setCurrentStep(COMPLETED_SENTINEL);
+        instance.setStatus(ProcessStatus.COMPLETED);
+        instance.setCompletedAt(LocalDateTime.now());
+        repository.saveAndFlush(instance);
+        log.debug("Process {} completed", instance.getId());
+
+        if (instance.getParentProcessId() != null) {
+            resumeParentProcess(instance);
+        }
+    }
+
+    /**
+     * Spawns a child process from the named definition and parks the parent
+     * at {@code WAITING_FOR_CHILD}.
+     */
+    private void startChildProcess(ProcessInstance parent, String childDefinitionName,
+            String nextAfterChild, Map<String, Object> context) {
+        ProcessDefinition childDef = definitionRepository.findByName(childDefinitionName)
+                .orElseThrow(() -> new IllegalArgumentException(
+                        "Unknown child definition: " + childDefinitionName));
+
+        // Park parent
+        parent.setStatus(ProcessStatus.WAITING_FOR_CHILD);
+        parent.setStepStartedAt(LocalDateTime.now());
+        parent.setContextData(serializeContext(context));
+        repository.saveAndFlush(parent);
+
+        // Create child instance with parent linkage
+        String contextJson = serializeContext(context);
+        ProcessInstance child = new ProcessInstance(
+                childDefinitionName, childDef.getInitialStep(), contextJson, ProcessStatus.RUNNING);
+        child.setParentProcessId(parent.getId());
+        child.setParentNextStep(nextAfterChild);
+        repository.saveAndFlush(child);
+
+        // Dispatch child's initial step
+        outboxRepository.save(new OutboxEvent(
+                child.getId().toString(), childDef.getInitialStep(), contextJson));
+        log.info("Process {} spawned child {} (definition={}), waiting for child",
+                parent.getId(), child.getId(), childDefinitionName);
+    }
+
+    /**
+     * Resumes the parent process after a child completes successfully.
+     * Merges the child's final context back into the parent.
+     */
+    private void resumeParentProcess(ProcessInstance child) {
+        UUID parentId = child.getParentProcessId();
+        ProcessInstance parent = repository.findById(parentId)
+                .orElseThrow(() -> new IllegalArgumentException("Parent process not found: " + parentId));
+
+        if (parent.getStatus() != ProcessStatus.WAITING_FOR_CHILD) {
+            log.warn("Parent {} is not WAITING_FOR_CHILD (status={}), skipping resume",
+                    parentId, parent.getStatus());
+            return;
+        }
+
+        // Merge child's final context into parent
+        Map<String, Object> childContext = mergeContext(child.getContextData(), null);
+        Map<String, Object> parentContext = mergeContext(parent.getContextData(), childContext);
+        parent.setContextData(serializeContext(parentContext));
+
+        String nextStep = child.getParentNextStep();
+        if (nextStep == null || COMPLETED_SENTINEL.equals(nextStep)) {
+            completeProcess(parent);
+        } else {
+            parent.setCurrentStep(nextStep);
+            parent.setStatus(ProcessStatus.RUNNING);
+            parent.setStepStartedAt(LocalDateTime.now());
+
+            // Track call-activity step as completed for saga purposes
+            List<String> steps = deserializeStringList(parent.getCompletedSteps());
+            steps.add(child.getDefinitionName() + "_CALL_ACTIVITY");
+            parent.setCompletedSteps(serializeStringList(steps));
+
+            repository.saveAndFlush(parent);
+            outboxRepository.save(new OutboxEvent(
+                    parentId.toString(), nextStep, serializeContext(parentContext)));
+            log.info("Parent {} resumed at step {} after child {} completed",
+                    parentId, nextStep, child.getId());
+        }
+    }
+
+    /**
+     * Propagates failure from a child process to its parent.
+     * Triggers the parent's own compensation chain if configured.
+     */
+    private void failParentProcess(ProcessInstance child) {
+        UUID parentId = child.getParentProcessId();
+        ProcessInstance parent = repository.findById(parentId)
+                .orElseThrow(() -> new IllegalArgumentException("Parent process not found: " + parentId));
+
+        if (parent.getStatus() != ProcessStatus.WAITING_FOR_CHILD) {
+            log.warn("Parent {} not WAITING_FOR_CHILD, skipping failure propagation", parentId);
+            return;
+        }
+
+        // Merge child error context into parent
+        Map<String, Object> childContext = mergeContext(child.getContextData(), null);
+        Map<String, Object> parentContext = mergeContext(parent.getContextData(), childContext);
+        parent.setContextData(serializeContext(parentContext));
+        parent.setStatus(ProcessStatus.RUNNING); // temporarily set RUNNING so handleFailure can process it
+
+        handleFailure(parent, Map.of("childProcessFailed", true,
+                "childProcessId", child.getId().toString()));
     }
 
     // -------------------------------------------------------------------------

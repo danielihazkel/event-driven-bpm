@@ -46,6 +46,16 @@ import java.util.List;
  *   { "delayMs": 5000, "next": "PROCESS_REQUEST" }
  * ]
  * </pre>
+ *
+ * <p><b>Call-activity rule</b> — use {@link #callActivity(String, String, String)}. When
+ * {@code callActivity} is set, the engine spawns a child process from the named definition,
+ * sets the parent to {@code status=WAITING_FOR_CHILD}, and resumes at {@code next} once the
+ * child completes.</p>
+ * <pre>
+ * "COLLECT_APPLICATION_FINISHED": [
+ *   { "callActivity": "CREDIT_CHECK_SUB", "next": "MAKE_DECISION" }
+ * ]
+ * </pre>
  */
 @JsonInclude(JsonInclude.Include.NON_NULL)
 @Schema(description = "A conditional branch in a process transition")
@@ -68,26 +78,34 @@ public record TransitionRule(
         Boolean suspend,
 
         @Schema(description = "For delay rules: milliseconds to wait before dispatching the 'next' step command. The process enters status=SCHEDULED until the timer fires.")
-        Long delayMs) {
+        Long delayMs,
+
+        @Schema(description = "For call-activity rules: name of the child process definition to invoke. The parent enters status=WAITING_FOR_CHILD until the child completes, then advances to 'next'.")
+        String callActivity) {
 
     /** Factory for single-next rules (the common case). */
     public static TransitionRule of(String condition, String next) {
-        return new TransitionRule(condition, next, null, null, null, null);
+        return new TransitionRule(condition, next, null, null, null, null, null);
     }
 
     /** Factory for fork rules — fans out to all parallel steps, then joins at joinStep. */
     public static TransitionRule fork(List<String> parallel, String joinStep) {
-        return new TransitionRule(null, null, parallel, joinStep, null, null);
+        return new TransitionRule(null, null, parallel, joinStep, null, null, null);
     }
 
     /** Factory for suspend rules — routes to suspendStep and halts there until a signal arrives. */
     public static TransitionRule suspend(String condition, String suspendStep) {
-        return new TransitionRule(condition, suspendStep, null, null, Boolean.TRUE, null);
+        return new TransitionRule(condition, suspendStep, null, null, Boolean.TRUE, null, null);
     }
 
     /** Factory for delay rules — advances to next after delayMs milliseconds. */
     public static TransitionRule delay(Long delayMs, String next) {
-        return new TransitionRule(null, next, null, null, null, delayMs);
+        return new TransitionRule(null, next, null, null, null, delayMs, null);
+    }
+
+    /** Factory for call-activity rules — spawns a child process, then advances parent to nextAfterChild. */
+    public static TransitionRule callActivity(String condition, String childDefinition, String nextAfterChild) {
+        return new TransitionRule(condition, nextAfterChild, null, null, null, null, childDefinition);
     }
 
     /** Returns true if this rule represents a parallel fork. */
@@ -112,5 +130,15 @@ public record TransitionRule(
     @JsonIgnore
     public boolean isDelay() {
         return delayMs != null;
+    }
+
+    /**
+     * Returns true if this rule spawns a child process via call activity.
+     * Named {@code isCallActivityRule} (not {@code isCallActivity}) to avoid
+     * Java Bean naming collision with the {@code callActivity} record component.
+     */
+    @JsonIgnore
+    public boolean isCallActivityRule() {
+        return callActivity != null && !callActivity.isBlank();
     }
 }

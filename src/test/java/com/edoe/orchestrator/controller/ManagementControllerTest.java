@@ -47,7 +47,7 @@ class ManagementControllerTest {
 
         private ProcessInstanceResponse sampleInstance(UUID id, ProcessStatus status) {
                 return new ProcessInstanceResponse(id, "FLOW", "STEP_1", status,
-                                LocalDateTime.now(), LocalDateTime.now(), null, "{}");
+                                LocalDateTime.now(), LocalDateTime.now(), null, "{}", null);
         }
 
         @Test
@@ -130,7 +130,7 @@ class ManagementControllerTest {
                 UUID id = UUID.randomUUID();
                 ProcessInstanceResponse cancelled = new ProcessInstanceResponse(id, "FLOW", "STEP_1",
                                 ProcessStatus.CANCELLED, LocalDateTime.now(), LocalDateTime.now(), LocalDateTime.now(),
-                                "{}");
+                                "{}", null);
                 when(managementService.cancelProcess(id)).thenReturn(cancelled);
 
                 mockMvc.perform(post("/api/processes/{id}/cancel", id))
@@ -149,7 +149,7 @@ class ManagementControllerTest {
 
         @Test
         void getMetricsSummary_returns200() throws Exception {
-                MetricsSummaryResponse metrics = new MetricsSummaryResponse(17, 3, 10, 2, 1, 1, 0, 0.77);
+                MetricsSummaryResponse metrics = new MetricsSummaryResponse(17, 3, 10, 2, 1, 1, 0, 0, 0.77);
                 when(managementService.getMetricsSummary()).thenReturn(metrics);
 
                 mockMvc.perform(get("/api/metrics/summary"))
@@ -163,7 +163,7 @@ class ManagementControllerTest {
         void signalProcess_returns200() throws Exception {
                 UUID id = UUID.randomUUID();
                 ProcessInstanceResponse resumed = new ProcessInstanceResponse(id, "LOAN_APPROVAL", "DISBURSE_FUNDS",
-                                ProcessStatus.RUNNING, LocalDateTime.now(), LocalDateTime.now(), null, "{}");
+                                ProcessStatus.RUNNING, LocalDateTime.now(), LocalDateTime.now(), null, "{}", null);
                 when(managementService.signalProcess(eq(id), eq("APPROVAL_GRANTED"), any()))
                                 .thenReturn(resumed);
 

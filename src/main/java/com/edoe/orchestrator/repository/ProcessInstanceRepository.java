@@ -29,4 +29,6 @@ public interface ProcessInstanceRepository extends JpaRepository<ProcessInstance
     long countByStatus(ProcessStatus status);
 
     List<ProcessInstance> findByStatusAndWakeAtLessThanEqual(ProcessStatus status, LocalDateTime now);
+
+    List<ProcessInstance> findByParentProcessId(UUID parentProcessId);
 }

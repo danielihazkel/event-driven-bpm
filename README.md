@@ -73,6 +73,7 @@ POST /start-flow
 | Human-in-the-loop (Signals) | Processes can be `SUSPENDED` to wait for external named signals via API, which evaluate transitions normally |
 | Saga Rollback / Compensation | Steps can map to compensation steps; on `<step>_FAILED` event, the engine will natively walk backwards and dispatch compensation commands |
 | Timer / Delay Steps | A transition rule can carry `delayMs`; the engine advances the current step but parks the process as `SCHEDULED` until a background timer fires and dispatches the command |
+| Sub-Processes (Call Activities) | A transition rule can carry `callActivity`; the engine spawns a child process from another definition, parks the parent as `WAITING_FOR_CHILD`, and automatically resumes it (with merged context) once the child completes or fails |
 
 ---
 
@@ -135,6 +136,27 @@ When a rule carries `delayMs`, the engine advances `currentStep` to `next` but s
 ```
 
 `delayMs` can be combined with a `condition` to apply the delay conditionally. Cancelled processes in `SCHEDULED` status are supported.
+
+### Call-activity rule (Sub-Processes)
+
+When a rule carries `callActivity`, the engine spawns a **child process** from the named definition, sets the parent to `WAITING_FOR_CHILD`, and waits. When the child reaches `COMPLETED`, the engine:
+
+1. Merges the child's final `context_data` back into the parent's context.
+2. Resumes the parent at `next` (or directly at `COMPLETED` if `next` is omitted).
+
+If the child fails, the failure propagates to the parent (triggering the parent's own compensation chain if configured).
+
+```json
+{
+  "COLLECT_APPLICATION_FINISHED": [
+    { "callActivity": "CREDIT_CHECK_SUB", "next": "MAKE_DECISION" }
+  ]
+}
+```
+
+`callActivity` can be combined with a `condition` so the sub-process is only invoked when the condition matches — the next unconditional branch acts as the bypass path.
+
+Cancelling a parent in `WAITING_FOR_CHILD` cascades the cancellation to any active child processes.
 
 ### Compensations (Saga Rollback)
 
@@ -206,7 +228,7 @@ Process Definitions can accept a `compensations` map. If a step fails with a `_F
 
 ## Example Flows (seeded on startup)
 
-Six example flows are upserted into the database on every app startup. They always reflect the latest engine features. Use them to experiment without creating definitions manually.
+Eight example flows are upserted into the database on every app startup. They always reflect the latest engine features. Use them to experiment without creating definitions manually.
 
 ### DEFAULT_FLOW
 
@@ -323,6 +345,33 @@ curl -s -X POST http://localhost:8080/start-flow \
 # → poll GET /status/{id} — you will observe status=SCHEDULED briefly, then RUNNING again
 ```
 
+### CREDIT_CHECK_SUB
+
+A reusable child definition invoked by `SUB_PROCESS_FLOW`. Can also be started standalone.
+
+```
+FETCH_CREDIT_REPORT → EVALUATE_SCORE → COMPLETED
+```
+
+### SUB_PROCESS_FLOW
+
+Demonstrates sub-process / call activities. After `COLLECT_APPLICATION` finishes, the engine spawns a `CREDIT_CHECK_SUB` child process and parks the parent at `WAITING_FOR_CHILD`. Once the child completes its two steps, the parent automatically resumes at `MAKE_DECISION` with the child's context merged in.
+
+```
+COLLECT_APPLICATION → [spawns CREDIT_CHECK_SUB child, status=WAITING_FOR_CHILD]
+                              ↓ child: FETCH_CREDIT_REPORT → EVALUATE_SCORE → COMPLETED
+                      [parent resumes] → MAKE_DECISION → COMPLETED
+```
+
+```bash
+# Start the parent flow
+curl -s -X POST http://localhost:8080/start-flow \
+  -H "Content-Type: application/json" \
+  -d '{"definitionName": "SUB_PROCESS_FLOW", "initialData": {}}'
+# → {\"processId\": \"<parent-id>\"}  status=WAITING_FOR_CHILD after COLLECT_APPLICATION finishes
+# A child process (CREDIT_CHECK_SUB) is automatically started — find it via GET /api/processes?definitionName=CREDIT_CHECK_SUB
+```
+
 ---
 
 ## API Reference
@@ -347,7 +396,7 @@ curl -s -X POST http://localhost:8080/start-flow \
 curl -s http://localhost:8080/status/550e8400-e29b-41d4-a716-446655440000
 ```
 
-Possible `status` values: `RUNNING`, `COMPLETED`, `FAILED`, `SUSPENDED`, `STALLED`, `CANCELLED`, `SCHEDULED`.
+Possible `status` values: `RUNNING`, `COMPLETED`, `FAILED`, `SUSPENDED`, `STALLED`, `CANCELLED`, `SCHEDULED`, `WAITING_FOR_CHILD`.
 
 ---
 
@@ -368,7 +417,7 @@ Possible `status` values: `RUNNING`, `COMPLETED`, `FAILED`, `SUSPENDED`, `STALLE
 | Method | Path | Description |
 |---|---|---|
 | `GET` | `/api/processes` | List instances, optionally filtered by `status` and `definitionName`, paginated |
-| `POST` | `/api/processes/{id}/cancel` | Cancel a `RUNNING`, `STALLED`, `SUSPENDED`, or `SCHEDULED` instance |
+| `POST` | `/api/processes/{id}/cancel` | Cancel a `RUNNING`, `STALLED`, `SUSPENDED`, `SCHEDULED`, or `WAITING_FOR_CHILD` instance (cascades to active child processes) |
 | `POST` | `/api/processes/{id}/retry` | Retry a failed or stalled instance |
 | `POST` | `/api/processes/{id}/advance` | Manually advance a stuck instance |
 | `POST` | `/api/processes/{id}/wake` | Force-wake a `SCHEDULED` process, skipping the remaining timer delay |
@@ -378,7 +427,7 @@ Possible `status` values: `RUNNING`, `COMPLETED`, `FAILED`, `SUSPENDED`, `STALLE
 
 | Method | Path | Description |
 |---|---|---|
-| `GET` | `/api/metrics/summary` | Total, running, completed, failed, stalled, cancelled, scheduled counts + success rate |
+| `GET` | `/api/metrics/summary` | Total, running, completed, failed, stalled, cancelled, scheduled, waitingForChild counts + success rate |
 
 ---
 
@@ -414,12 +463,12 @@ src/main/java/com/edoe/orchestrator/
 │   ├── ProcessDefinitionResponse.java
 │   ├── ProcessInstanceResponse.java
 │   ├── StartFlowRequest.java
-│   └── TransitionRule.java          # Branch rule: {condition, next}, {parallel, joinStep}, {suspend}, or {delayMs, next}
+│   └── TransitionRule.java          # Branch rule: {condition, next}, {parallel, joinStep}, {suspend}, {delayMs, next}, or {callActivity, next}
 ├── entity/
 │   ├── OutboxEvent.java             # outbox_events table
 │   ├── ProcessDefinition.java       # process_definitions table
 │   ├── ProcessInstance.java         # process_instances table
-│   └── ProcessStatus.java           # RUNNING/COMPLETED/FAILED/SUSPENDED/STALLED/CANCELLED/SCHEDULED
+│   └── ProcessStatus.java           # RUNNING/COMPLETED/FAILED/SUSPENDED/STALLED/CANCELLED/SCHEDULED/WAITING_FOR_CHILD
 ├── listener/
 │   └── WorkerEventListener.java     # Consumes "worker-events" topic
 ├── repository/

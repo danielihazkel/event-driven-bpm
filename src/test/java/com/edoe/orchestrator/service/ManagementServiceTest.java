@@ -286,6 +286,8 @@ class ManagementServiceTest {
         when(instanceRepository.countByStatus(ProcessStatus.FAILED)).thenReturn(2L);
         when(instanceRepository.countByStatus(ProcessStatus.STALLED)).thenReturn(1L);
         when(instanceRepository.countByStatus(ProcessStatus.CANCELLED)).thenReturn(1L);
+        when(instanceRepository.countByStatus(ProcessStatus.SCHEDULED)).thenReturn(0L);
+        when(instanceRepository.countByStatus(ProcessStatus.WAITING_FOR_CHILD)).thenReturn(0L);
 
         MetricsSummaryResponse summary = managementService.getMetricsSummary();
 
@@ -302,5 +304,46 @@ class ManagementServiceTest {
         MetricsSummaryResponse summary = managementService.getMetricsSummary();
 
         assertThat(summary.successRate()).isEqualTo(0.0);
+    }
+
+    // --- Call Activity / Sub-Process tests ---
+
+    @Test
+    void cancelProcess_waitingForChild_cascadesToChildProcesses() throws Exception {
+        UUID parentId = UUID.randomUUID();
+        UUID childId = UUID.randomUUID();
+
+        ProcessInstance parent = instance(parentId, "FLOW", "STEP_1", ProcessStatus.WAITING_FOR_CHILD);
+        ProcessInstance child = instance(childId, "SUB_FLOW", "SUB_STEP", ProcessStatus.RUNNING);
+        child.setParentProcessId(parentId);
+
+        when(instanceRepository.findById(parentId)).thenReturn(Optional.of(parent));
+        when(instanceRepository.saveAndFlush(any())).thenAnswer(inv -> inv.getArgument(0));
+        when(instanceRepository.findByParentProcessId(parentId)).thenReturn(List.of(child));
+
+        ProcessInstanceResponse resp = managementService.cancelProcess(parentId);
+
+        assertThat(resp.status()).isEqualTo(ProcessStatus.CANCELLED);
+        assertThat(child.getStatus()).isEqualTo(ProcessStatus.CANCELLED);
+        assertThat(child.getCompletedAt()).isNotNull();
+
+        // Parent + child both saved
+        verify(instanceRepository, times(2)).saveAndFlush(any());
+    }
+
+    @Test
+    void getMetricsSummary_includesWaitingForChildCount() {
+        when(instanceRepository.countByStatus(ProcessStatus.RUNNING)).thenReturn(1L);
+        when(instanceRepository.countByStatus(ProcessStatus.COMPLETED)).thenReturn(5L);
+        when(instanceRepository.countByStatus(ProcessStatus.FAILED)).thenReturn(0L);
+        when(instanceRepository.countByStatus(ProcessStatus.STALLED)).thenReturn(0L);
+        when(instanceRepository.countByStatus(ProcessStatus.CANCELLED)).thenReturn(0L);
+        when(instanceRepository.countByStatus(ProcessStatus.SCHEDULED)).thenReturn(0L);
+        when(instanceRepository.countByStatus(ProcessStatus.WAITING_FOR_CHILD)).thenReturn(2L);
+
+        MetricsSummaryResponse summary = managementService.getMetricsSummary();
+
+        assertThat(summary.waitingForChild()).isEqualTo(2L);
+        assertThat(summary.total()).isEqualTo(8L);
     }
 }

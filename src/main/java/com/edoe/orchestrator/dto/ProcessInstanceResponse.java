@@ -16,5 +16,6 @@ public record ProcessInstanceResponse(
                 @Schema(description = "Timestamp when the process was started") LocalDateTime createdAt,
                 @Schema(description = "Timestamp when the current step was started") LocalDateTime stepStartedAt,
                 @Schema(description = "Timestamp when the process was completed") LocalDateTime completedAt,
-                @Schema(description = "Context data associated with the process as a JSON string", example = "{\"orderId\": \"12345\"}") String contextData) {
+                @Schema(description = "Context data associated with the process as a JSON string", example = "{\"orderId\": \"12345\"}") String contextData,
+                @Schema(description = "UUID of the parent process if this is a child sub-process") UUID parentProcessId) {
 }

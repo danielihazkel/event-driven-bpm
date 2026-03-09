@@ -578,4 +578,233 @@ class TransitionServiceTest {
         assertThat(inst.getCompletedSteps()).isEqualTo("[\"RESERVE_INVENTORY\"]");
         assertThat(inst.getCurrentStep()).isEqualTo("CHARGE_PAYMENT");
     }
+
+    // -------------------------------------------------------------------------
+    // Call Activity / Sub-Process tests (Phase 10)
+    // -------------------------------------------------------------------------
+
+    // 25. callActivity rule parks parent at WAITING_FOR_CHILD and starts child
+    @Test
+    void handleEvent_callActivityRule_parksParentAndStartsChild() throws Exception {
+        UUID parentId = UUID.randomUUID();
+        UUID childId = UUID.randomUUID();
+        String callTransitions = "{\"COLLECT_APPLICATION_FINISHED\":["
+                + "{\"callActivity\":\"CREDIT_CHECK_SUB\",\"next\":\"MAKE_DECISION\"}"
+                + "]}";
+        ProcessDefinition parentDef = new ProcessDefinition("TEST_FLOW", "COLLECT_APPLICATION", callTransitions);
+        ProcessDefinition childDef = new ProcessDefinition("CREDIT_CHECK_SUB", "FETCH_CREDIT_REPORT",
+                "{\"FETCH_CREDIT_REPORT_FINISHED\":[{\"next\":\"COMPLETED\"}]}");
+
+        ProcessInstance parent = instanceWithId(parentId, "COLLECT_APPLICATION", ProcessStatus.RUNNING, "{}");
+
+        when(repository.findById(parentId)).thenReturn(Optional.of(parent));
+        when(repository.saveAndFlush(any())).thenAnswer(inv -> {
+            ProcessInstance pi = inv.getArgument(0);
+            if (pi.getId() == null) {
+                // New child instance — assign an ID
+                Field f = ProcessInstance.class.getDeclaredField("id");
+                f.setAccessible(true);
+                f.set(pi, childId);
+            }
+            return pi;
+        });
+        when(definitionRepository.findByName("TEST_FLOW")).thenReturn(Optional.of(parentDef));
+        when(definitionRepository.findByName("CREDIT_CHECK_SUB")).thenReturn(Optional.of(childDef));
+
+        transitionService.handleEvent(parentId.toString(), "COLLECT_APPLICATION_FINISHED", Map.of());
+
+        // Parent should be WAITING_FOR_CHILD
+        assertThat(parent.getStatus()).isEqualTo(ProcessStatus.WAITING_FOR_CHILD);
+
+        // A child instance should have been saved
+        ArgumentCaptor<ProcessInstance> instCaptor = ArgumentCaptor.forClass(ProcessInstance.class);
+        verify(repository, times(2)).saveAndFlush(instCaptor.capture());
+        ProcessInstance savedChild = instCaptor.getAllValues().stream()
+                .filter(pi -> "CREDIT_CHECK_SUB".equals(pi.getDefinitionName()))
+                .findFirst().orElseThrow();
+        assertThat(savedChild.getStatus()).isEqualTo(ProcessStatus.RUNNING);
+        assertThat(savedChild.getCurrentStep()).isEqualTo("FETCH_CREDIT_REPORT");
+        assertThat(savedChild.getParentProcessId()).isEqualTo(parentId);
+        assertThat(savedChild.getParentNextStep()).isEqualTo("MAKE_DECISION");
+
+        // Outbox event for child's initial step
+        ArgumentCaptor<OutboxEvent> outboxCaptor = ArgumentCaptor.forClass(OutboxEvent.class);
+        verify(outboxRepository).save(outboxCaptor.capture());
+        assertThat(outboxCaptor.getValue().getEventType()).isEqualTo("FETCH_CREDIT_REPORT");
+        assertThat(outboxCaptor.getValue().getAggregateId()).isEqualTo(childId.toString());
+    }
+
+    // 26. child process completion resumes parent at nextAfterChild step
+    @Test
+    void handleEvent_childCompletes_resumesParent() throws Exception {
+        UUID parentId = UUID.randomUUID();
+        UUID childId = UUID.randomUUID();
+
+        ProcessInstance parent = instanceWithId(parentId, "COLLECT_APPLICATION", ProcessStatus.WAITING_FOR_CHILD, "{}");
+        ProcessInstance child = instanceWithIdAndDef(childId, "CREDIT_CHECK_SUB", "EVALUATE_SCORE",
+                ProcessStatus.RUNNING, "{\"creditScore\":750}");
+        child.setParentProcessId(parentId);
+        child.setParentNextStep("MAKE_DECISION");
+
+        String childTransitions = "{\"EVALUATE_SCORE_FINISHED\":[{\"next\":\"COMPLETED\"}]}";
+        ProcessDefinition childDef = new ProcessDefinition("CREDIT_CHECK_SUB", "FETCH_CREDIT_REPORT", childTransitions);
+
+        when(repository.findById(childId)).thenReturn(Optional.of(child));
+        when(repository.findById(parentId)).thenReturn(Optional.of(parent));
+        when(repository.saveAndFlush(any())).thenAnswer(inv -> inv.getArgument(0));
+        when(definitionRepository.findByName("CREDIT_CHECK_SUB")).thenReturn(Optional.of(childDef));
+
+        transitionService.handleEvent(childId.toString(), "EVALUATE_SCORE_FINISHED", Map.of());
+
+        // Child should be COMPLETED
+        assertThat(child.getStatus()).isEqualTo(ProcessStatus.COMPLETED);
+
+        // Parent should be RUNNING at MAKE_DECISION
+        assertThat(parent.getStatus()).isEqualTo(ProcessStatus.RUNNING);
+        assertThat(parent.getCurrentStep()).isEqualTo("MAKE_DECISION");
+
+        // Outbox event for parent's next step
+        ArgumentCaptor<OutboxEvent> outboxCaptor = ArgumentCaptor.forClass(OutboxEvent.class);
+        verify(outboxRepository).save(outboxCaptor.capture());
+        assertThat(outboxCaptor.getValue().getEventType()).isEqualTo("MAKE_DECISION");
+        assertThat(outboxCaptor.getValue().getAggregateId()).isEqualTo(parentId.toString());
+    }
+
+    // 27. child completion merges child context into parent context
+    @Test
+    void handleEvent_childCompletes_mergesContextIntoParent() throws Exception {
+        UUID parentId = UUID.randomUUID();
+        UUID childId = UUID.randomUUID();
+
+        ProcessInstance parent = instanceWithId(parentId, "COLLECT_APPLICATION", ProcessStatus.WAITING_FOR_CHILD,
+                "{\"applicantName\":\"Alice\"}");
+        ProcessInstance child = instanceWithIdAndDef(childId, "CREDIT_CHECK_SUB", "EVALUATE_SCORE",
+                ProcessStatus.RUNNING, "{\"applicantName\":\"Alice\"}");
+        child.setParentProcessId(parentId);
+        child.setParentNextStep("MAKE_DECISION");
+
+        String childTransitions = "{\"EVALUATE_SCORE_FINISHED\":[{\"next\":\"COMPLETED\"}]}";
+        ProcessDefinition childDef = new ProcessDefinition("CREDIT_CHECK_SUB", "FETCH_CREDIT_REPORT", childTransitions);
+
+        when(repository.findById(childId)).thenReturn(Optional.of(child));
+        when(repository.findById(parentId)).thenReturn(Optional.of(parent));
+        when(repository.saveAndFlush(any())).thenAnswer(inv -> inv.getArgument(0));
+        when(definitionRepository.findByName("CREDIT_CHECK_SUB")).thenReturn(Optional.of(childDef));
+
+        transitionService.handleEvent(childId.toString(), "EVALUATE_SCORE_FINISHED",
+                Map.of("creditScore", 750));
+
+        @SuppressWarnings("unchecked")
+        Map<String, Object> parentContext = objectMapper.readValue(parent.getContextData(), Map.class);
+        assertThat(parentContext).containsEntry("applicantName", "Alice");
+        assertThat(parentContext).containsEntry("creditScore", 750);
+    }
+
+    // 28. child failure propagates failure to parent
+    @Test
+    void handleEvent_childFails_failsParent() throws Exception {
+        UUID parentId = UUID.randomUUID();
+        UUID childId = UUID.randomUUID();
+
+        ProcessInstance parent = instanceWithId(parentId, "COLLECT_APPLICATION", ProcessStatus.WAITING_FOR_CHILD, "{}");
+        parent.setCompletedSteps("[]");
+        ProcessInstance child = instanceWithIdAndDef(childId, "CREDIT_CHECK_SUB", "FETCH_CREDIT_REPORT",
+                ProcessStatus.RUNNING, "{}");
+        child.setParentProcessId(parentId);
+        child.setParentNextStep("MAKE_DECISION");
+        child.setCompletedSteps("[]");
+
+        // Child definition has no compensations
+        ProcessDefinition childDef = new ProcessDefinition("CREDIT_CHECK_SUB", "FETCH_CREDIT_REPORT", "{}");
+        childDef.setCompensationsJson("{}");
+
+        // Parent definition also has no compensations
+        ProcessDefinition parentDef = new ProcessDefinition("TEST_FLOW", "COLLECT_APPLICATION", "{}");
+        parentDef.setCompensationsJson("{}");
+
+        when(repository.findById(childId)).thenReturn(Optional.of(child));
+        when(repository.findById(parentId)).thenReturn(Optional.of(parent));
+        when(repository.saveAndFlush(any())).thenAnswer(inv -> inv.getArgument(0));
+        when(definitionRepository.findByName("CREDIT_CHECK_SUB")).thenReturn(Optional.of(childDef));
+        when(definitionRepository.findByName("TEST_FLOW")).thenReturn(Optional.of(parentDef));
+
+        transitionService.handleEvent(childId.toString(), "FETCH_CREDIT_REPORT_FAILED", Map.of("error", "timeout"));
+
+        // Child should be FAILED
+        assertThat(child.getStatus()).isEqualTo(ProcessStatus.FAILED);
+
+        // Parent should also be FAILED
+        assertThat(parent.getStatus()).isEqualTo(ProcessStatus.FAILED);
+        assertThat(parent.getCompletedAt()).isNotNull();
+    }
+
+    // 29. callActivity with condition only fires when condition matches
+    @Test
+    void handleEvent_callActivityWithCondition_evaluatesCondition() throws Exception {
+        UUID id = UUID.randomUUID();
+        // First rule: callActivity when needsCreditCheck=true; default: go to MAKE_DECISION directly
+        String condCallTransitions = "{\"COLLECT_APPLICATION_FINISHED\":["
+                + "{\"condition\":\"#needsCreditCheck == true\",\"callActivity\":\"CREDIT_CHECK_SUB\",\"next\":\"MAKE_DECISION\"},"
+                + "{\"next\":\"MAKE_DECISION\"}"
+                + "]}";
+        ProcessDefinition def = new ProcessDefinition("TEST_FLOW", "COLLECT_APPLICATION", condCallTransitions);
+
+        // needsCreditCheck=false → should go directly to MAKE_DECISION, not call activity
+        ProcessInstance inst = instanceWithId(id, "COLLECT_APPLICATION", ProcessStatus.RUNNING,
+                "{\"needsCreditCheck\":false}");
+
+        when(repository.findById(id)).thenReturn(Optional.of(inst));
+        when(repository.saveAndFlush(any())).thenAnswer(inv -> inv.getArgument(0));
+        when(definitionRepository.findByName("TEST_FLOW")).thenReturn(Optional.of(def));
+
+        transitionService.handleEvent(id.toString(), "COLLECT_APPLICATION_FINISHED", Map.of());
+
+        // Should go directly to MAKE_DECISION (not call activity)
+        assertThat(inst.getStatus()).isEqualTo(ProcessStatus.RUNNING);
+        assertThat(inst.getCurrentStep()).isEqualTo("MAKE_DECISION");
+    }
+
+    // 30. WAITING_FOR_CHILD process ignores worker events
+    @Test
+    void handleEvent_waitingForChild_ignoresWorkerEvents() throws Exception {
+        UUID id = UUID.randomUUID();
+        ProcessInstance inst = instanceWithId(id, "COLLECT_APPLICATION", ProcessStatus.WAITING_FOR_CHILD, "{}");
+        when(repository.findById(id)).thenReturn(Optional.of(inst));
+
+        transitionService.handleEvent(id.toString(), "COLLECT_APPLICATION_FINISHED", Map.of());
+
+        verify(repository, never()).saveAndFlush(any());
+        verifyNoInteractions(outboxRepository);
+    }
+
+    // 31. child completion with nextAfterChild=COMPLETED completes parent too
+    @Test
+    void handleEvent_childCompletesWithNextCompleted_completesParent() throws Exception {
+        UUID parentId = UUID.randomUUID();
+        UUID childId = UUID.randomUUID();
+
+        ProcessInstance parent = instanceWithId(parentId, "SOME_STEP", ProcessStatus.WAITING_FOR_CHILD, "{}");
+        ProcessInstance child = instanceWithIdAndDef(childId, "CREDIT_CHECK_SUB", "EVALUATE_SCORE",
+                ProcessStatus.RUNNING, "{}");
+        child.setParentProcessId(parentId);
+        child.setParentNextStep("COMPLETED");
+
+        String childTransitions = "{\"EVALUATE_SCORE_FINISHED\":[{\"next\":\"COMPLETED\"}]}";
+        ProcessDefinition childDef = new ProcessDefinition("CREDIT_CHECK_SUB", "FETCH_CREDIT_REPORT", childTransitions);
+
+        when(repository.findById(childId)).thenReturn(Optional.of(child));
+        when(repository.findById(parentId)).thenReturn(Optional.of(parent));
+        when(repository.saveAndFlush(any())).thenAnswer(inv -> inv.getArgument(0));
+        when(definitionRepository.findByName("CREDIT_CHECK_SUB")).thenReturn(Optional.of(childDef));
+
+        transitionService.handleEvent(childId.toString(), "EVALUATE_SCORE_FINISHED", Map.of());
+
+        // Both child and parent should be COMPLETED
+        assertThat(child.getStatus()).isEqualTo(ProcessStatus.COMPLETED);
+        assertThat(parent.getStatus()).isEqualTo(ProcessStatus.COMPLETED);
+        assertThat(parent.getCompletedAt()).isNotNull();
+
+        // No outbox event for parent (it completed, not transitioned)
+        verifyNoInteractions(outboxRepository);
+    }
 }

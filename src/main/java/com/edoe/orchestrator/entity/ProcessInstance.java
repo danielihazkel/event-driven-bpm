@@ -48,6 +48,16 @@ public class ProcessInstance {
     @Column(name = "wake_at")
     private LocalDateTime wakeAt;
 
+    // --- Sub-Process / Call Activity state (Phase 10) ---
+
+    /** UUID of the parent process that spawned this child. Null for top-level processes. */
+    @Column(name = "parent_process_id")
+    private UUID parentProcessId;
+
+    /** The step the parent should advance to when this child process completes. */
+    @Column(name = "parent_next_step")
+    private String parentNextStep;
+
     // --- Fork/Join state (Phase 7) ---
 
     /** Number of parallel branches still outstanding. Null when not in a fork. */
@@ -118,6 +128,22 @@ public class ProcessInstance {
 
     public void setWakeAt(LocalDateTime wakeAt) {
         this.wakeAt = wakeAt;
+    }
+
+    public UUID getParentProcessId() {
+        return parentProcessId;
+    }
+
+    public void setParentProcessId(UUID parentProcessId) {
+        this.parentProcessId = parentProcessId;
+    }
+
+    public String getParentNextStep() {
+        return parentNextStep;
+    }
+
+    public void setParentNextStep(String parentNextStep) {
+        this.parentNextStep = parentNextStep;
     }
 
     public Integer getParallelPending() {
