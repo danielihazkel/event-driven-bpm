@@ -37,6 +37,15 @@ import java.util.List;
  *   { "next": "MANUAL_REVIEW", "suspend": true }
  * ]
  * </pre>
+ *
+ * <p><b>Delay rule</b> — use {@link #delay(Long, String)}. When {@code delayMs} is set,
+ * the engine advances to {@code next} but sets {@code status=SCHEDULED} and {@code wakeAt=now+delayMs}.
+ * A background timer dispatches the step command once the delay has elapsed.</p>
+ * <pre>
+ * "PREPARE_REQUEST_FINISHED": [
+ *   { "delayMs": 5000, "next": "PROCESS_REQUEST" }
+ * ]
+ * </pre>
  */
 @JsonInclude(JsonInclude.Include.NON_NULL)
 @Schema(description = "A conditional branch in a process transition")
@@ -56,21 +65,29 @@ public record TransitionRule(
         String joinStep,
 
         @Schema(description = "When true, the process parks at 'next' with status=SUSPENDED and waits for a POST /api/processes/{id}/signal call.")
-        Boolean suspend) {
+        Boolean suspend,
+
+        @Schema(description = "For delay rules: milliseconds to wait before dispatching the 'next' step command. The process enters status=SCHEDULED until the timer fires.")
+        Long delayMs) {
 
     /** Factory for single-next rules (the common case). */
     public static TransitionRule of(String condition, String next) {
-        return new TransitionRule(condition, next, null, null, null);
+        return new TransitionRule(condition, next, null, null, null, null);
     }
 
     /** Factory for fork rules — fans out to all parallel steps, then joins at joinStep. */
     public static TransitionRule fork(List<String> parallel, String joinStep) {
-        return new TransitionRule(null, null, parallel, joinStep, null);
+        return new TransitionRule(null, null, parallel, joinStep, null, null);
     }
 
     /** Factory for suspend rules — routes to suspendStep and halts there until a signal arrives. */
     public static TransitionRule suspend(String condition, String suspendStep) {
-        return new TransitionRule(condition, suspendStep, null, null, Boolean.TRUE);
+        return new TransitionRule(condition, suspendStep, null, null, Boolean.TRUE, null);
+    }
+
+    /** Factory for delay rules — advances to next after delayMs milliseconds. */
+    public static TransitionRule delay(Long delayMs, String next) {
+        return new TransitionRule(null, next, null, null, null, delayMs);
     }
 
     /** Returns true if this rule represents a parallel fork. */
@@ -89,5 +106,11 @@ public record TransitionRule(
     @JsonIgnore
     public boolean isSuspendGate() {
         return Boolean.TRUE.equals(suspend);
+    }
+
+    /** Returns true if this rule represents a timer delay before dispatching the next step. */
+    @JsonIgnore
+    public boolean isDelay() {
+        return delayMs != null;
     }
 }

@@ -117,7 +117,8 @@ public class ManagementService {
                 .orElseThrow(() -> new NoSuchElementException("Process not found: " + id));
         if (instance.getStatus() != ProcessStatus.RUNNING
                 && instance.getStatus() != ProcessStatus.STALLED
-                && instance.getStatus() != ProcessStatus.SUSPENDED) {
+                && instance.getStatus() != ProcessStatus.SUSPENDED
+                && instance.getStatus() != ProcessStatus.SCHEDULED) {
             throw new IllegalStateException("Cannot cancel process in status: " + instance.getStatus());
         }
         instance.setStatus(ProcessStatus.CANCELLED);
@@ -173,10 +174,11 @@ public class ManagementService {
         long failed = instanceRepository.countByStatus(ProcessStatus.FAILED);
         long stalled = instanceRepository.countByStatus(ProcessStatus.STALLED);
         long cancelled = instanceRepository.countByStatus(ProcessStatus.CANCELLED);
-        long total = running + completed + failed + stalled + cancelled;
+        long scheduled = instanceRepository.countByStatus(ProcessStatus.SCHEDULED);
+        long total = running + completed + failed + stalled + cancelled + scheduled;
         long denominator = completed + failed + cancelled;
         double successRate = denominator > 0 ? (double) completed / denominator : 0.0;
-        return new MetricsSummaryResponse(total, running, completed, failed, stalled, cancelled, successRate);
+        return new MetricsSummaryResponse(total, running, completed, failed, stalled, cancelled, scheduled, successRate);
     }
 
     // --- Mapping helpers ---

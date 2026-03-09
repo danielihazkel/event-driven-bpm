@@ -36,6 +36,7 @@ edoe:
     step-timeout-minutes: 30
     stalled-check-interval-ms: 60000
     outbox-poll-interval-ms: 1000
+    timer-poll-interval-ms: 5000
 
 logging:
   level:

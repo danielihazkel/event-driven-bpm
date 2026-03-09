@@ -149,7 +149,7 @@ class ManagementControllerTest {
 
         @Test
         void getMetricsSummary_returns200() throws Exception {
-                MetricsSummaryResponse metrics = new MetricsSummaryResponse(17, 3, 10, 2, 1, 1, 0.77);
+                MetricsSummaryResponse metrics = new MetricsSummaryResponse(17, 3, 10, 2, 1, 1, 0, 0.77);
                 when(managementService.getMetricsSummary()).thenReturn(metrics);
 
                 mockMvc.perform(get("/api/metrics/summary"))

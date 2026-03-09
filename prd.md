@@ -160,6 +160,31 @@ Conditions use **Spring Expression Language (SpEL)** and are evaluated against t
 * [x] **Terminal States:** After all compensations complete, the process moves to `FAILED` (partial / unrecoverable) or `CANCELLED` (fully rolled back).
 * [x] **Updated Seeded Example:** Add a `PAYMENT_SAGA` flow that demonstrates full rollback: `RESERVE_INVENTORY → CHARGE_PAYMENT → SHIP_ORDER`, with compensations for each step.
 
+### Phase 10: Advanced Workflow Patterns (Developer Experience & Execution)
+
+* [x] **Timer / Delay Steps:** Add a `DelayStep` definition. Create a new `SCHEDULED` status. Implement a mechanism to wake up the process after a defined duration or at a specific timestamp.
+* [ ] **Sub-Processes (Call Activities):** Extend `TransitionRule` to support a `callActivity: "OTHER_PROCESS_DEFINITION"` field. Start the child definition, keeping the parent in a `WAITING_FOR_CHILD` status until complete.
+* [ ] **Multi-Instance (Scatter-Gather):** Add `multiInstanceVariable` evaluation. Dynamically spawn parallel commands based on array size in `context_data` and gather results back into a combined Context array.
+* [ ] **Process Versioning:** Update `ProcessDefinition` to include an integer `version` field. The `ProcessInstance` stores the `definitionVersion` it started with to prevent breaking active instances. Make Management API version-aware.
+
+### Phase 11: State Management & Data Handling
+
+* [ ] **Context Mapping & JSONPath Filtering:** Add an `outputMapping` property. Instead of merging all worker outputs into root context, use JSONPath expressions to precisely place specific fields from the output.
+* [ ] **Event Sourcing (Audit Log):** Create a `process_audit_logs` table. Insert an immutable row on every state transition, command dispatch, and received event.
+* [ ] **Time-Travel / Replay Mechanism:** Build an API endpoint `/api/processes/{id}/replay?fromStep={step}`. Reconstruct process state from `process_audit_logs` up to that step and re-queue the command, allowing manual intervention on stuck processes.
+
+### Phase 12: Integration & Extensibility
+
+* [ ] **Native HTTP REST Step:** Introduce an `HttpTaskWorker` built into the engine with `httpRequest` configuration in the `TransitionRule` (URL, Method, Headers, Body with SpEL). Executes HTTP calls natively instead of using Kafka outbox.
+* [ ] **Webhook Subscriptions:** Create a `webhook_subscriptions` table. Listen for terminal state changes (`COMPLETED`, `FAILED`, `CANCELLED`) and dispatch asynchronous HTTP POST payloads to registered stakeholder URIs.
+* [ ] **Pluggable Architecture (SPI):** Refactor worker dispatch to use standard Java SPI or Spring plugin patterns, enabling developers to drop JARs into the classpath and transparently add new native step types.
+
+### Phase 13: Enterprise Readiness & Resiliency
+
+* [ ] **Distributed Task Scheduling / Locking:** Implement a distributed lock mechanism (e.g., ShedLock on PostgreSQL) for background pollers like `StepTimeoutService` and `OutboxPoller` to prevent race conditions when horizontally scaling Orchestrator replicas.
+* [ ] **Compensation Failure Management:** Support cases where Rollback commands themselves fail. Add a `COMPENSATION_FAILED` status, trigger emergency alerts, and provide a manual acknowledgement endpoint after DB remediation.
+* [ ] **Security & RBAC:** Secure Management REST APIs with OAuth2/JWT. Implement Role-Based Access Control distinguishing `ROLE_ADMIN` (edit definitions, cancel tasks) and `ROLE_VIEWER` (read metrics). Update Swagger UI with authentication requirements.
+
 ---
 
 ## 6. The "Generic" Flow Logic

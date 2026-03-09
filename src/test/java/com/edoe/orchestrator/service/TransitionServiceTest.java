@@ -18,6 +18,7 @@ import org.mockito.junit.jupiter.MockitoExtension;
 import com.edoe.orchestrator.dto.TransitionRule;
 
 import java.lang.reflect.Field;
+import java.time.LocalDateTime;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
@@ -534,7 +535,29 @@ class TransitionServiceTest {
         verifyNoInteractions(outboxRepository);
     }
 
-    // 23. step successfully completes and is added to completedSteps
+    // 23. delay rule sets SCHEDULED status, wakeAt, advances currentStep, writes no outbox event
+    @Test
+    void handleEvent_delayRule_setsStatusScheduledAndNoOutbox() throws Exception {
+        UUID id = UUID.randomUUID();
+        String delayTransitions = "{\"PREPARE_REQUEST_FINISHED\":["
+                + "{\"delayMs\":3000,\"next\":\"PROCESS_REQUEST\"}"
+                + "]}";
+        ProcessDefinition def = new ProcessDefinition("TEST_FLOW", "PREPARE_REQUEST", delayTransitions);
+        ProcessInstance inst = instanceWithId(id, "PREPARE_REQUEST", ProcessStatus.RUNNING, "{}");
+        when(repository.findById(id)).thenReturn(Optional.of(inst));
+        when(repository.saveAndFlush(any())).thenAnswer(inv -> inv.getArgument(0));
+        when(definitionRepository.findByName("TEST_FLOW")).thenReturn(Optional.of(def));
+
+        transitionService.handleEvent(id.toString(), "PREPARE_REQUEST_FINISHED", Map.of());
+
+        assertThat(inst.getStatus()).isEqualTo(ProcessStatus.SCHEDULED);
+        assertThat(inst.getCurrentStep()).isEqualTo("PROCESS_REQUEST");
+        assertThat(inst.getWakeAt()).isNotNull();
+        assertThat(inst.getWakeAt()).isAfter(LocalDateTime.now().minusSeconds(1));
+        verifyNoInteractions(outboxRepository);
+    }
+
+    // 24. step successfully completes and is added to completedSteps
     @Test
     void handleEvent_normalCompletion_addsToCompletedSteps() throws Exception {
         UUID id = UUID.randomUUID();

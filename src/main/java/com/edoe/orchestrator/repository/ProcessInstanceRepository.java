@@ -27,4 +27,6 @@ public interface ProcessInstanceRepository extends JpaRepository<ProcessInstance
     boolean existsByDefinitionNameAndStatusIn(String definitionName, Collection<ProcessStatus> statuses);
 
     long countByStatus(ProcessStatus status);
+
+    List<ProcessInstance> findByStatusAndWakeAtLessThanEqual(ProcessStatus status, LocalDateTime now);
 }

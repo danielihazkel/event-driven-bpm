@@ -45,6 +45,7 @@ public class DataInitializer implements CommandLineRunner {
         seedOrderFulfillment();
         seedParallelFlow();
         seedPaymentSaga();
+        seedDelayFlow();
     }
 
     // -------------------------------------------------------------------------
@@ -153,6 +154,19 @@ public class DataInitializer implements CommandLineRunner {
                 Map.of(
                         "RESERVE_INVENTORY", "UNDO_RESERVE_INVENTORY",
                         "CHARGE_PAYMENT", "REFUND_PAYMENT"));
+    }
+
+    // -------------------------------------------------------------------------
+    // DELAY_FLOW — demonstrates timer / delay steps (Phase 10)
+    // Features: delayMs rule parks process as SCHEDULED; TimerService wakes it
+    //
+    // Flow:
+    // PREPARE_REQUEST → (3 000 ms delay) → PROCESS_REQUEST → COMPLETED
+    // -------------------------------------------------------------------------
+    private void seedDelayFlow() {
+        upsert("DELAY_FLOW", "PREPARE_REQUEST", Map.of(
+                "PREPARE_REQUEST_FINISHED", List.of(TransitionRule.delay(3000L, "PROCESS_REQUEST")),
+                "PROCESS_REQUEST_FINISHED", List.of(TransitionRule.of(null, "COMPLETED"))));
     }
 
     // -------------------------------------------------------------------------

@@ -42,6 +42,12 @@ public class ProcessInstance {
     @Column(name = "completed_steps", columnDefinition = "TEXT")
     private String completedSteps = "[]";
 
+    // --- Timer / Delay state (Phase 10) ---
+
+    /** Timestamp at which a SCHEDULED process should be woken up. Null when not in a delay. */
+    @Column(name = "wake_at")
+    private LocalDateTime wakeAt;
+
     // --- Fork/Join state (Phase 7) ---
 
     /** Number of parallel branches still outstanding. Null when not in a fork. */
@@ -104,6 +110,14 @@ public class ProcessInstance {
 
     public LocalDateTime getCompletedAt() {
         return completedAt;
+    }
+
+    public LocalDateTime getWakeAt() {
+        return wakeAt;
+    }
+
+    public void setWakeAt(LocalDateTime wakeAt) {
+        this.wakeAt = wakeAt;
     }
 
     public Integer getParallelPending() {

@@ -134,6 +134,8 @@ public class TransitionService {
             dispatchFork(instance, matched.parallel(), matched.joinStep(), mergedData);
         } else if (matched != null && matched.isSuspendGate()) {
             suspendProcess(instance, matched.next(), mergedData);
+        } else if (matched != null && matched.isDelay()) {
+            scheduleProcess(instance, matched.next(), matched.delayMs(), mergedData);
         } else {
             String nextStep = (matched == null) ? COMPLETED_SENTINEL : matched.next();
             if (COMPLETED_SENTINEL.equals(nextStep)) {
@@ -226,6 +228,27 @@ public class TransitionService {
         instance.setContextData(serializeContext(context));
         repository.saveAndFlush(instance);
         log.info("Process {} suspended at step {}", instance.getId(), suspendStep);
+    }
+
+    // -------------------------------------------------------------------------
+    // Timer / Delay
+    // -------------------------------------------------------------------------
+
+    /**
+     * Advances the process to {@code nextStep} but parks it with
+     * {@code status=SCHEDULED} until {@code wakeAt} is reached.
+     * No outbox command is written — {@link TimerService} will dispatch it.
+     */
+    private void scheduleProcess(ProcessInstance instance, String nextStep, long delayMs,
+            Map<String, Object> context) {
+        instance.setCurrentStep(nextStep);
+        instance.setStatus(ProcessStatus.SCHEDULED);
+        instance.setWakeAt(LocalDateTime.now().plusNanos(delayMs * 1_000_000L));
+        instance.setStepStartedAt(LocalDateTime.now());
+        instance.setContextData(serializeContext(context));
+        repository.saveAndFlush(instance);
+        log.info("Process {} scheduled at step {} — will wake at {}", instance.getId(), nextStep,
+                instance.getWakeAt());
     }
 
     // -------------------------------------------------------------------------
