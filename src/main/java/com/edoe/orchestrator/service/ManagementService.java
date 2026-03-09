@@ -122,8 +122,24 @@ public class ManagementService {
             throw new IllegalStateException("Cannot cancel process in status: " + instance.getStatus());
         }
         instance.setStatus(ProcessStatus.CANCELLED);
+        instance.setWakeAt(null);
         instance.setCompletedAt(LocalDateTime.now());
         return toInstanceResponse(instanceRepository.saveAndFlush(instance));
+    }
+
+    @Transactional
+    public ProcessInstanceResponse wakeProcess(UUID id) {
+        ProcessInstance instance = instanceRepository.findById(id)
+                .orElseThrow(() -> new NoSuchElementException("Process not found: " + id));
+        if (instance.getStatus() != ProcessStatus.SCHEDULED) {
+            throw new IllegalStateException("Cannot wake process in status: " + instance.getStatus());
+        }
+        instance.setStatus(ProcessStatus.RUNNING);
+        instance.setWakeAt(null);
+        instance.setStepStartedAt(LocalDateTime.now());
+        instanceRepository.saveAndFlush(instance);
+        outboxRepository.save(new OutboxEvent(id.toString(), instance.getCurrentStep(), instance.getContextData()));
+        return toInstanceResponse(instance);
     }
 
     @Transactional

@@ -371,6 +371,7 @@ Possible `status` values: `RUNNING`, `COMPLETED`, `FAILED`, `SUSPENDED`, `STALLE
 | `POST` | `/api/processes/{id}/cancel` | Cancel a `RUNNING`, `STALLED`, `SUSPENDED`, or `SCHEDULED` instance |
 | `POST` | `/api/processes/{id}/retry` | Retry a failed or stalled instance |
 | `POST` | `/api/processes/{id}/advance` | Manually advance a stuck instance |
+| `POST` | `/api/processes/{id}/wake` | Force-wake a `SCHEDULED` process, skipping the remaining timer delay |
 | `POST` | `/api/processes/{id}/signal` | Injects a named signal event into a `SUSPENDED` process, resuming it from its current gate step |
 
 #### Metrics

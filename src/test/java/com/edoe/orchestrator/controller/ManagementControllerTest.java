@@ -204,4 +204,14 @@ class ManagementControllerTest {
                                 .andExpect(status().isConflict())
                                 .andExpect(jsonPath("$.error").exists());
         }
+
+        @Test
+        void wakeProcess_returns200() throws Exception {
+                UUID id = UUID.randomUUID();
+                when(managementService.wakeProcess(id)).thenReturn(sampleInstance(id, ProcessStatus.RUNNING));
+
+                mockMvc.perform(post("/api/processes/{id}/wake", id))
+                                .andExpect(status().isOk())
+                                .andExpect(jsonPath("$.status").value("RUNNING"));
+        }
 }

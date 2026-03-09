@@ -249,6 +249,34 @@ class ManagementServiceTest {
         assertThat(resp.status()).isEqualTo(ProcessStatus.CANCELLED);
     }
 
+    // --- Wake tests ---
+
+    @Test
+    void wakeProcess_scheduledProcess_setsRunningAndDispatchesOutbox() throws Exception {
+        UUID id = UUID.randomUUID();
+        ProcessInstance inst = instance(id, "DELAY_FLOW", "PROCESS_REQUEST", ProcessStatus.SCHEDULED);
+        inst.setWakeAt(LocalDateTime.now().plusMinutes(5));
+        when(instanceRepository.findById(id)).thenReturn(Optional.of(inst));
+        when(instanceRepository.saveAndFlush(any())).thenAnswer(inv -> inv.getArgument(0));
+
+        ProcessInstanceResponse resp = managementService.wakeProcess(id);
+
+        assertThat(resp.status()).isEqualTo(ProcessStatus.RUNNING);
+        assertThat(inst.getWakeAt()).isNull();
+        verify(outboxRepository).save(any());
+    }
+
+    @Test
+    void wakeProcess_nonScheduledProcess_throwsIllegalStateException() throws Exception {
+        UUID id = UUID.randomUUID();
+        ProcessInstance inst = instance(id, "DELAY_FLOW", "STEP_1", ProcessStatus.RUNNING);
+        when(instanceRepository.findById(id)).thenReturn(Optional.of(inst));
+
+        assertThatThrownBy(() -> managementService.wakeProcess(id))
+                .isInstanceOf(IllegalStateException.class)
+                .hasMessageContaining("Cannot wake");
+    }
+
     // --- Metrics tests ---
 
     @Test

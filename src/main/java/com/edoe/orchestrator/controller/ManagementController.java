@@ -115,6 +115,18 @@ public class ManagementController {
         return managementService.advanceProcess(id);
     }
 
+    @Operation(summary = "Force-wake a scheduled process",
+               description = "Immediately wakes a SCHEDULED process, skipping the remaining timer delay and dispatching the pending step command")
+    @ApiResponses(value = {
+            @ApiResponse(responseCode = "200", description = "Process woken successfully"),
+            @ApiResponse(responseCode = "404", description = "Process instance not found"),
+            @ApiResponse(responseCode = "409", description = "Process is not in SCHEDULED status")
+    })
+    @PostMapping("/processes/{id}/wake")
+    public ProcessInstanceResponse wakeProcess(@PathVariable UUID id) {
+        return managementService.wakeProcess(id);
+    }
+
     @Operation(summary = "Signal a suspended process",
                description = "Injects a named signal event into a SUSPENDED process, resuming it from its current gate step")
     @ApiResponses(value = {
