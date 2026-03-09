@@ -22,6 +22,7 @@ import org.springframework.data.domain.Pageable;
 import java.lang.reflect.Field;
 import java.time.LocalDateTime;
 import java.util.List;
+import java.util.Map;
 import java.util.NoSuchElementException;
 import java.util.Optional;
 import java.util.Set;
@@ -205,6 +206,43 @@ class ManagementServiceTest {
 
         assertThatThrownBy(() -> managementService.advanceProcess(id))
                 .isInstanceOf(IllegalStateException.class);
+    }
+
+    // --- Signal tests ---
+
+    @Test
+    void signalProcess_delegatesToTransitionService() throws Exception {
+        UUID id = UUID.randomUUID();
+        ProcessInstance inst = instance(id, "LOAN_FLOW", "DISBURSE_FUNDS", ProcessStatus.RUNNING);
+        when(instanceRepository.existsById(id)).thenReturn(true);
+        when(instanceRepository.findById(id)).thenReturn(Optional.of(inst));
+
+        managementService.signalProcess(id, "APPROVAL_GRANTED", Map.of("approved", true));
+
+        verify(transitionService).handleSignal(eq(id.toString()), eq("APPROVAL_GRANTED"),
+                argThat(m -> Boolean.TRUE.equals(m.get("approved"))));
+    }
+
+    @Test
+    void signalProcess_throwsWhenProcessNotFound() {
+        UUID id = UUID.randomUUID();
+        when(instanceRepository.existsById(id)).thenReturn(false);
+
+        assertThatThrownBy(() -> managementService.signalProcess(id, "APPROVAL_GRANTED", Map.of()))
+                .isInstanceOf(NoSuchElementException.class)
+                .hasMessageContaining(id.toString());
+    }
+
+    @Test
+    void cancelProcess_cancelsSuspendedProcess() throws Exception {
+        UUID id = UUID.randomUUID();
+        ProcessInstance inst = instance(id, "LOAN_FLOW", "MANUAL_REVIEW", ProcessStatus.SUSPENDED);
+        when(instanceRepository.findById(id)).thenReturn(Optional.of(inst));
+        when(instanceRepository.saveAndFlush(any())).thenAnswer(inv -> inv.getArgument(0));
+
+        ProcessInstanceResponse resp = managementService.cancelProcess(id);
+
+        assertThat(resp.status()).isEqualTo(ProcessStatus.CANCELLED);
     }
 
     // --- Metrics tests ---

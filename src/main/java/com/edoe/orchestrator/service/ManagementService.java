@@ -114,7 +114,9 @@ public class ManagementService {
     public ProcessInstanceResponse cancelProcess(UUID id) {
         ProcessInstance instance = instanceRepository.findById(id)
                 .orElseThrow(() -> new NoSuchElementException("Process not found: " + id));
-        if (instance.getStatus() != ProcessStatus.RUNNING && instance.getStatus() != ProcessStatus.STALLED) {
+        if (instance.getStatus() != ProcessStatus.RUNNING
+                && instance.getStatus() != ProcessStatus.STALLED
+                && instance.getStatus() != ProcessStatus.SUSPENDED) {
             throw new IllegalStateException("Cannot cancel process in status: " + instance.getStatus());
         }
         instance.setStatus(ProcessStatus.CANCELLED);
@@ -148,6 +150,17 @@ public class ManagementService {
         // Re-fetch to get the updated state after handleEvent
         instance = instanceRepository.findById(id)
                 .orElseThrow(() -> new NoSuchElementException("Process not found after advance: " + id));
+        return toInstanceResponse(instance);
+    }
+
+    @Transactional
+    public ProcessInstanceResponse signalProcess(UUID id, String event, Map<String, Object> data) {
+        if (!instanceRepository.existsById(id)) {
+            throw new NoSuchElementException("Process not found: " + id);
+        }
+        transitionService.handleSignal(id.toString(), event, data);
+        ProcessInstance instance = instanceRepository.findById(id)
+                .orElseThrow(() -> new NoSuchElementException("Process not found after signal: " + id));
         return toInstanceResponse(instance);
     }
 

@@ -155,4 +155,49 @@ class ManagementControllerTest {
                 .andExpect(jsonPath("$.running").value(3))
                 .andExpect(jsonPath("$.completed").value(10));
     }
+
+    @Test
+    void signalProcess_returns200() throws Exception {
+        UUID id = UUID.randomUUID();
+        ProcessInstanceResponse resumed = new ProcessInstanceResponse(id, "LOAN_APPROVAL", "DISBURSE_FUNDS",
+                ProcessStatus.RUNNING, LocalDateTime.now(), LocalDateTime.now(), null, "{}");
+        when(managementService.signalProcess(eq(id), eq("APPROVAL_GRANTED"), any()))
+                .thenReturn(resumed);
+
+        SignalRequest req = new SignalRequest("APPROVAL_GRANTED", Map.of("approved", true));
+        mockMvc.perform(post("/api/processes/{id}/signal", id)
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(objectMapper.writeValueAsString(req)))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.currentStep").value("DISBURSE_FUNDS"))
+                .andExpect(jsonPath("$.status").value("RUNNING"));
+    }
+
+    @Test
+    void signalProcess_returns404WhenNotFound() throws Exception {
+        UUID id = UUID.randomUUID();
+        when(managementService.signalProcess(eq(id), any(), any()))
+                .thenThrow(new NoSuchElementException("Process not found: " + id));
+
+        SignalRequest req = new SignalRequest("APPROVAL_GRANTED", Map.of());
+        mockMvc.perform(post("/api/processes/{id}/signal", id)
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(objectMapper.writeValueAsString(req)))
+                .andExpect(status().isNotFound())
+                .andExpect(jsonPath("$.error").exists());
+    }
+
+    @Test
+    void signalProcess_returns409WhenNotSuspended() throws Exception {
+        UUID id = UUID.randomUUID();
+        when(managementService.signalProcess(eq(id), any(), any()))
+                .thenThrow(new IllegalStateException("Cannot signal process " + id + " in status: RUNNING"));
+
+        SignalRequest req = new SignalRequest("APPROVAL_GRANTED", Map.of());
+        mockMvc.perform(post("/api/processes/{id}/signal", id)
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(objectMapper.writeValueAsString(req)))
+                .andExpect(status().isConflict())
+                .andExpect(jsonPath("$.error").exists());
+    }
 }

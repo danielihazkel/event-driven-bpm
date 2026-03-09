@@ -367,4 +367,90 @@ class TransitionServiceTest {
         verifyNoInteractions(outboxRepository);
         assertThat(inst.getParallelPending()).isEqualTo(1);
     }
+
+    // 17. suspend rule sets SUSPENDED, advances currentStep, writes no outbox event
+    @Test
+    void handleEvent_suspendRule_setsStatusSuspendedAndNoOutbox() throws Exception {
+        UUID id = UUID.randomUUID();
+        // Transition: VALIDATE_CREDIT_FINISHED → suspend at MANUAL_REVIEW when creditScore <= 700
+        String suspendTransitions = "{\"VALIDATE_CREDIT_FINISHED\":["
+                + "{\"condition\":\"#creditScore > 700\",\"next\":\"AUTO_APPROVE\"},"
+                + "{\"next\":\"MANUAL_REVIEW\",\"suspend\":true}"
+                + "]}";
+        ProcessDefinition def = new ProcessDefinition("TEST_FLOW", "VALIDATE_CREDIT", suspendTransitions);
+        ProcessInstance inst = instanceWithId(id, "VALIDATE_CREDIT", ProcessStatus.RUNNING, "{\"creditScore\":600}");
+        when(repository.findById(id)).thenReturn(Optional.of(inst));
+        when(repository.saveAndFlush(any())).thenAnswer(inv -> inv.getArgument(0));
+        when(definitionRepository.findByName("TEST_FLOW")).thenReturn(Optional.of(def));
+
+        transitionService.handleEvent(id.toString(), "VALIDATE_CREDIT_FINISHED", Map.of());
+
+        assertThat(inst.getStatus()).isEqualTo(ProcessStatus.SUSPENDED);
+        assertThat(inst.getCurrentStep()).isEqualTo("MANUAL_REVIEW");
+        verifyNoInteractions(outboxRepository);
+    }
+
+    // 18. handleSignal on a SUSPENDED process resumes and dispatches the next step
+    @Test
+    void handleSignal_suspendedProcess_resumesAndDispatchesNextStep() throws Exception {
+        UUID id = UUID.randomUUID();
+        // Transitions keyed on signal event name (not _FINISHED convention)
+        String signalTransitions = "{\"APPROVAL_GRANTED\":["
+                + "{\"condition\":\"#approved == true\",\"next\":\"DISBURSE_FUNDS\"},"
+                + "{\"next\":\"SEND_REJECTION\"}"
+                + "]}";
+        ProcessDefinition def = new ProcessDefinition("TEST_FLOW", "VALIDATE_CREDIT", signalTransitions);
+        ProcessInstance inst = instanceWithId(id, "MANUAL_REVIEW", ProcessStatus.SUSPENDED, "{\"creditScore\":600}");
+        when(repository.findById(id)).thenReturn(Optional.of(inst));
+        when(repository.saveAndFlush(any())).thenAnswer(inv -> inv.getArgument(0));
+        when(definitionRepository.findByName("TEST_FLOW")).thenReturn(Optional.of(def));
+
+        transitionService.handleSignal(id.toString(), "APPROVAL_GRANTED", Map.of("approved", true));
+
+        assertThat(inst.getCurrentStep()).isEqualTo("DISBURSE_FUNDS");
+        assertThat(inst.getStatus()).isEqualTo(ProcessStatus.RUNNING);
+
+        ArgumentCaptor<OutboxEvent> captor = ArgumentCaptor.forClass(OutboxEvent.class);
+        verify(outboxRepository).save(captor.capture());
+        assertThat(captor.getValue().getEventType()).isEqualTo("DISBURSE_FUNDS");
+    }
+
+    // 19. handleSignal on a non-SUSPENDED process throws IllegalStateException
+    @Test
+    void handleSignal_nonSuspendedProcess_throwsIllegalStateException() throws Exception {
+        UUID id = UUID.randomUUID();
+        ProcessInstance inst = instanceWithId(id, "STEP_1", ProcessStatus.RUNNING, "{}");
+        when(repository.findById(id)).thenReturn(Optional.of(inst));
+
+        assertThatThrownBy(() -> transitionService.handleSignal(id.toString(), "SOME_SIGNAL", Map.of()))
+                .isInstanceOf(IllegalStateException.class)
+                .hasMessageContaining(id.toString());
+    }
+
+    // 20. handleSignal merges signal data into existing context before evaluating conditions
+    @Test
+    void handleSignal_mergesSignalDataIntoContext() throws Exception {
+        UUID id = UUID.randomUUID();
+        String signalTransitions = "{\"APPROVAL_GRANTED\":["
+                + "{\"condition\":\"#approved == true\",\"next\":\"DISBURSE_FUNDS\"},"
+                + "{\"next\":\"SEND_REJECTION\"}"
+                + "]}";
+        ProcessDefinition def = new ProcessDefinition("TEST_FLOW", "VALIDATE_CREDIT", signalTransitions);
+        // Existing context has loanAmount; signal will add approved
+        ProcessInstance inst = instanceWithId(id, "MANUAL_REVIEW", ProcessStatus.SUSPENDED, "{\"loanAmount\":50000}");
+        when(repository.findById(id)).thenReturn(Optional.of(inst));
+        when(repository.saveAndFlush(any())).thenAnswer(inv -> inv.getArgument(0));
+        when(definitionRepository.findByName("TEST_FLOW")).thenReturn(Optional.of(def));
+
+        transitionService.handleSignal(id.toString(), "APPROVAL_GRANTED", Map.of("approved", false));
+
+        // Rejected path (approved=false → SEND_REJECTION)
+        assertThat(inst.getCurrentStep()).isEqualTo("SEND_REJECTION");
+
+        // Both original and signal data must be in the merged context
+        @SuppressWarnings("unchecked")
+        Map<String, Object> merged = objectMapper.readValue(inst.getContextData(), Map.class);
+        assertThat(merged).containsEntry("loanAmount", 50000);
+        assertThat(merged).containsEntry("approved", false);
+    }
 }

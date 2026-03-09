@@ -56,25 +56,27 @@ public class DataInitializer implements CommandLineRunner {
 
     // -------------------------------------------------------------------------
     // LOAN_APPROVAL — credit-score based approval workflow
-    // Features: conditional branching (SpEL), multiple terminal paths
+    // Features: conditional branching (SpEL), human-in-the-loop suspend/signal (Phase 8)
     //
     // Happy path (creditScore > 700):
     //   VALIDATE_CREDIT → AUTO_APPROVE → DISBURSE_FUNDS → COMPLETED
-    // Low-score path (creditScore <= 700, then approved=true from manual review):
-    //   VALIDATE_CREDIT → MANUAL_REVIEW → DISBURSE_FUNDS → COMPLETED
-    // Rejection path (creditScore <= 700, then approved=false):
-    //   VALIDATE_CREDIT → MANUAL_REVIEW → SEND_REJECTION → COMPLETED
+    // Manual review path (creditScore <= 700):
+    //   VALIDATE_CREDIT → MANUAL_REVIEW (SUSPENDED — awaits loan-officer signal)
+    //     POST /api/processes/{id}/signal {"event":"APPROVAL_GRANTED","data":{"approved":true}}
+    //       → approved=true  → DISBURSE_FUNDS → COMPLETED
+    //       → approved=false → SEND_REJECTION → COMPLETED
     // -------------------------------------------------------------------------
     private void seedLoanApproval() {
         upsert("LOAN_APPROVAL", "VALIDATE_CREDIT", Map.of(
                 "VALIDATE_CREDIT_FINISHED", List.of(
                         TransitionRule.of("#creditScore > 700", "AUTO_APPROVE"),
-                        TransitionRule.of(null,"MANUAL_REVIEW")          // default branch
+                        TransitionRule.suspend(null, "MANUAL_REVIEW")    // suspend: awaits signal
                 ),
                 "AUTO_APPROVE_FINISHED", List.of(
                         TransitionRule.of(null,"DISBURSE_FUNDS")
                 ),
-                "MANUAL_REVIEW_FINISHED", List.of(
+                // Signal key — matches the "event" field in POST /api/processes/{id}/signal
+                "APPROVAL_GRANTED", List.of(
                         TransitionRule.of("#approved == true", "DISBURSE_FUNDS"),
                         TransitionRule.of(null,"SEND_REJECTION")         // default branch
                 ),

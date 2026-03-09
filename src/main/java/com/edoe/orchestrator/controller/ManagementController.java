@@ -115,6 +115,19 @@ public class ManagementController {
         return managementService.advanceProcess(id);
     }
 
+    @Operation(summary = "Signal a suspended process",
+               description = "Injects a named signal event into a SUSPENDED process, resuming it from its current gate step")
+    @ApiResponses(value = {
+            @ApiResponse(responseCode = "200", description = "Signal accepted, process resumed"),
+            @ApiResponse(responseCode = "404", description = "Process instance not found"),
+            @ApiResponse(responseCode = "409", description = "Process is not in SUSPENDED status")
+    })
+    @PostMapping("/processes/{id}/signal")
+    public ProcessInstanceResponse signalProcess(@PathVariable UUID id,
+                                                 @RequestBody SignalRequest request) {
+        return managementService.signalProcess(id, request.event(), request.data());
+    }
+
     // --- Metrics ---
 
     @Operation(summary = "Get metrics summary", description = "Retrieves high-level metrics for all process instances in the system")

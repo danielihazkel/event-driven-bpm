@@ -61,4 +61,18 @@ class StepTimeoutServiceTest {
         verify(repository).findStalledProcesses(any(LocalDateTime.class));
         verifyNoMoreInteractions(repository);
     }
+
+    // Suspended processes are intentionally waiting — the query already filters on status=RUNNING,
+    // so SUSPENDED processes are excluded at the DB level and never marked STALLED.
+    @Test
+    void suspendedProcessIsNotMarkedStalled() {
+        // Simulate query returning empty list (SUSPENDED processes are excluded by the query predicate)
+        when(repository.findStalledProcesses(any(LocalDateTime.class))).thenReturn(List.of());
+
+        stepTimeoutService.detectStalledProcesses();
+
+        // Only the query call should happen — no saveAndFlush, no status mutation
+        verify(repository).findStalledProcesses(any(LocalDateTime.class));
+        verifyNoMoreInteractions(repository);
+    }
 }

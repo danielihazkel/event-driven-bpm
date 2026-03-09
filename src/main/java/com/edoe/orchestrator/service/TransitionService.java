@@ -103,6 +103,8 @@ public class TransitionService {
 
         if (matched != null && matched.isFork()) {
             dispatchFork(instance, matched.parallel(), matched.joinStep(), mergedData);
+        } else if (matched != null && matched.isSuspendGate()) {
+            suspendProcess(instance, matched.next(), mergedData);
         } else {
             String nextStep = (matched == null) ? COMPLETED_SENTINEL : matched.next();
             if (COMPLETED_SENTINEL.equals(nextStep)) {
@@ -119,6 +121,76 @@ public class TransitionService {
                 log.debug("Process {} transitioned to step {}", processId, nextStep);
             }
         }
+    }
+
+    /**
+     * Resumes a SUSPENDED process by injecting a named signal event.
+     * The signal is evaluated exactly like a worker *_FINISHED event — transition rules
+     * keyed on {@code signalEvent} are looked up and the first matching branch fires.
+     * Signal data is merged into the process context before condition evaluation.
+     */
+    @Transactional
+    public void handleSignal(String processId, String signalEvent, Map<String, Object> signalData) {
+        UUID uuid = UUID.fromString(processId);
+        ProcessInstance instance = repository.findById(uuid)
+                .orElseThrow(() -> new IllegalArgumentException("Unknown processId: " + processId));
+
+        if (instance.getStatus() != ProcessStatus.SUSPENDED) {
+            throw new IllegalStateException(
+                    "Cannot signal process " + processId + " in status: " + instance.getStatus());
+        }
+
+        ProcessDefinition definition = definitionRepository.findByName(instance.getDefinitionName())
+                .orElseThrow(() -> new IllegalArgumentException(
+                        "Unknown definition: " + instance.getDefinitionName()));
+
+        Map<String, List<TransitionRule>> transitions = deserializeTransitions(definition.getTransitionsJson());
+        Map<String, Object> mergedData = mergeContext(instance.getContextData(), signalData);
+        instance.setContextData(serializeContext(mergedData));
+
+        List<TransitionRule> rules = transitions.get(signalEvent);
+        TransitionRule matched = (rules != null) ? evaluateBranches(rules, mergedData) : null;
+
+        if (matched != null && matched.isFork()) {
+            instance.setStatus(ProcessStatus.RUNNING);
+            dispatchFork(instance, matched.parallel(), matched.joinStep(), mergedData);
+        } else if (matched != null && matched.isSuspendGate()) {
+            suspendProcess(instance, matched.next(), mergedData);
+        } else {
+            String nextStep = (matched == null) ? COMPLETED_SENTINEL : matched.next();
+            if (COMPLETED_SENTINEL.equals(nextStep)) {
+                instance.setCurrentStep(COMPLETED_SENTINEL);
+                instance.setStatus(ProcessStatus.COMPLETED);
+                instance.setCompletedAt(LocalDateTime.now());
+                repository.saveAndFlush(instance);
+                log.debug("Process {} completed via signal {}", processId, signalEvent);
+            } else {
+                instance.setCurrentStep(nextStep);
+                instance.setStatus(ProcessStatus.RUNNING);
+                instance.setStepStartedAt(LocalDateTime.now());
+                repository.saveAndFlush(instance);
+                outboxRepository.save(new OutboxEvent(processId, nextStep, serializeContext(mergedData)));
+                log.info("Process {} resumed from signal {}, transitioned to step {}",
+                        processId, signalEvent, nextStep);
+            }
+        }
+    }
+
+    // -------------------------------------------------------------------------
+    // Suspend
+    // -------------------------------------------------------------------------
+
+    /**
+     * Parks the process at {@code suspendStep} with {@code status=SUSPENDED}.
+     * No outbox command is written — the process waits for an external signal.
+     */
+    private void suspendProcess(ProcessInstance instance, String suspendStep, Map<String, Object> context) {
+        instance.setCurrentStep(suspendStep);
+        instance.setStatus(ProcessStatus.SUSPENDED);
+        instance.setStepStartedAt(LocalDateTime.now());
+        instance.setContextData(serializeContext(context));
+        repository.saveAndFlush(instance);
+        log.info("Process {} suspended at step {}", instance.getId(), suspendStep);
     }
 
     // -------------------------------------------------------------------------

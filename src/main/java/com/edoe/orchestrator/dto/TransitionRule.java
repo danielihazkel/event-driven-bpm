@@ -27,6 +27,16 @@ import java.util.List;
  *   { "parallel": ["VALIDATE_CREDIT", "VERIFY_IDENTITY"], "joinStep": "APPROVE_LOAN" }
  * ]
  * </pre>
+ *
+ * <p><b>Suspend rule</b> — use {@link #suspend(String, String)}. When {@code suspend} is true,
+ * the engine parks the process at {@code next} with {@code status=SUSPENDED} and dispatches
+ * no command. Resume via {@code POST /api/processes/{id}/signal}.</p>
+ * <pre>
+ * "VALIDATE_CREDIT_FINISHED": [
+ *   { "condition": "#creditScore > 700", "next": "AUTO_APPROVE" },
+ *   { "next": "MANUAL_REVIEW", "suspend": true }
+ * ]
+ * </pre>
  */
 @JsonInclude(JsonInclude.Include.NON_NULL)
 @Schema(description = "A conditional branch in a process transition")
@@ -43,21 +53,41 @@ public record TransitionRule(
         List<String> parallel,
 
         @Schema(description = "For fork rules: the step to transition to after all parallel branches have completed.")
-        String joinStep) {
+        String joinStep,
+
+        @Schema(description = "When true, the process parks at 'next' with status=SUSPENDED and waits for a POST /api/processes/{id}/signal call.")
+        Boolean suspend) {
 
     /** Factory for single-next rules (the common case). */
     public static TransitionRule of(String condition, String next) {
-        return new TransitionRule(condition, next, null, null);
+        return new TransitionRule(condition, next, null, null, null);
     }
 
     /** Factory for fork rules — fans out to all parallel steps, then joins at joinStep. */
     public static TransitionRule fork(List<String> parallel, String joinStep) {
-        return new TransitionRule(null, null, parallel, joinStep);
+        return new TransitionRule(null, null, parallel, joinStep, null);
+    }
+
+    /** Factory for suspend rules — routes to suspendStep and halts there until a signal arrives. */
+    public static TransitionRule suspend(String condition, String suspendStep) {
+        return new TransitionRule(condition, suspendStep, null, null, Boolean.TRUE);
     }
 
     /** Returns true if this rule represents a parallel fork. */
     @JsonIgnore
     public boolean isFork() {
         return parallel != null && !parallel.isEmpty();
+    }
+
+    /**
+     * Returns true if this rule causes the process to suspend at the next step.
+     * Named {@code isSuspendGate} (not {@code isSuspend}) to avoid Java Bean naming
+     * collision: {@code isSuspend()} would be treated as a bean getter for the
+     * {@code "suspend"} property, and the {@code @JsonIgnore} would prevent Jackson
+     * from deserializing the {@code suspend} JSON field.
+     */
+    @JsonIgnore
+    public boolean isSuspendGate() {
+        return Boolean.TRUE.equals(suspend);
     }
 }

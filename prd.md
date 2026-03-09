@@ -144,13 +144,13 @@ Conditions use **Spring Expression Language (SpEL)** and are evaluated against t
 * [x] **Idempotency Guard:** Duplicate `*_FINISHED` events for an already-merged parallel branch are ignored via `parallelCompleted` JSON array tracking.
 * [x] **Updated Seeded Example:** Added `PARALLEL_FLOW` — `PREPARE_APPLICATION` forks into `VALIDATE_CREDIT ∥ VERIFY_IDENTITY`, then joins at `APPROVE_LOAN`.
 
-### Phase 8: Human-in-the-Loop / Approval Gates
+### Phase 8: Human-in-the-Loop / Approval Gates ✅
 
-* [ ] **Signal Endpoint:** `POST /api/processes/{id}/signal` accepts a JSON body (`{ "event": "APPROVAL_GRANTED", "data": {...} }`) and injects a synthetic event into the orchestrator, resuming a suspended process.
-* [ ] **Suspend Step Type:** A step whose transition rule has `suspend: true` causes the engine to set `status = SUSPENDED` and stop dispatching further commands, waiting for an external signal.
-* [ ] **Resume Logic:** `TransitionService` handles the signal event exactly like a worker `*_FINISHED` event, evaluating transition rules from the suspended step.
-* [ ] **Timeout Integration:** `StepTimeoutService` must skip `SUSPENDED` processes (they are intentionally waiting, not stalled).
-* [ ] **Updated Seeded Example:** Update `LOAN_APPROVAL` so `MANUAL_REVIEW` suspends the process until a loan-officer signal arrives.
+* [x] **Signal Endpoint:** `POST /api/processes/{id}/signal` accepts a JSON body (`{ "event": "APPROVAL_GRANTED", "data": {...} }`) and injects a synthetic event into the orchestrator, resuming a suspended process.
+* [x] **Suspend Step Type:** A step whose transition rule has `suspend: true` causes the engine to set `status = SUSPENDED` and stop dispatching further commands, waiting for an external signal.
+* [x] **Resume Logic:** `TransitionService` handles the signal event exactly like a worker `*_FINISHED` event, evaluating transition rules from the suspended step.
+* [x] **Timeout Integration:** `StepTimeoutService` must skip `SUSPENDED` processes (they are intentionally waiting, not stalled).
+* [x] **Updated Seeded Example:** Update `LOAN_APPROVAL` so `MANUAL_REVIEW` suspends the process until a loan-officer signal arrives.
 
 ### Phase 9: Compensation / Saga Rollback
 
