@@ -168,7 +168,7 @@ public class ManagementService {
     // --- Mapping helpers ---
 
     private ProcessDefinitionResponse toDefinitionResponse(ProcessDefinition def) {
-        Map<String, String> transitions = deserializeTransitions(def.getTransitionsJson());
+        Map<String, List<TransitionRule>> transitions = deserializeTransitions(def.getTransitionsJson());
         return new ProcessDefinitionResponse(def.getId(), def.getName(), def.getInitialStep(),
                 transitions, def.getCreatedAt(), def.getUpdatedAt());
     }
@@ -179,7 +179,7 @@ public class ManagementService {
                 inst.getCompletedAt(), inst.getContextData());
     }
 
-    private String serializeTransitions(Map<String, String> transitions) {
+    private String serializeTransitions(Map<String, List<TransitionRule>> transitions) {
         try {
             return objectMapper.writeValueAsString(transitions);
         } catch (JsonProcessingException e) {
@@ -187,9 +187,9 @@ public class ManagementService {
         }
     }
 
-    private Map<String, String> deserializeTransitions(String json) {
+    private Map<String, List<TransitionRule>> deserializeTransitions(String json) {
         try {
-            return objectMapper.readValue(json, new TypeReference<Map<String, String>>() {});
+            return objectMapper.readValue(json, new TypeReference<Map<String, List<TransitionRule>>>() {});
         } catch (JsonProcessingException e) {
             throw new RuntimeException("Failed to deserialize transitions", e);
         }

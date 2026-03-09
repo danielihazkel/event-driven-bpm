@@ -44,7 +44,7 @@ class ManagementServiceTest {
     private final ObjectMapper objectMapper = new ObjectMapper();
 
     private static final String TRANSITIONS_JSON =
-            "{\"STEP_1_FINISHED\":\"STEP_2\",\"STEP_2_FINISHED\":\"COMPLETED\"}";
+            "{\"STEP_1_FINISHED\":[{\"next\":\"STEP_2\"}],\"STEP_2_FINISHED\":[{\"next\":\"COMPLETED\"}]}";
 
     @BeforeEach
     void setUp() {
@@ -77,7 +77,7 @@ class ManagementServiceTest {
     @Test
     void createDefinition_savesAndReturns() {
         ProcessDefinitionRequest req = new ProcessDefinitionRequest("NEW_FLOW", "STEP_1",
-                java.util.Map.of("STEP_1_FINISHED", "COMPLETED"));
+                java.util.Map.of("STEP_1_FINISHED", List.of(new TransitionRule(null, "COMPLETED"))));
         when(definitionRepository.existsByName("NEW_FLOW")).thenReturn(false);
         when(definitionRepository.save(any())).thenAnswer(inv -> inv.getArgument(0));
 

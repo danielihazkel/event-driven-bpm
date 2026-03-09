@@ -1,5 +1,6 @@
 package com.edoe.orchestrator.service;
 
+import com.edoe.orchestrator.dto.TransitionRule;
 import com.edoe.orchestrator.entity.OutboxEvent;
 import com.edoe.orchestrator.entity.ProcessDefinition;
 import com.edoe.orchestrator.entity.ProcessInstance;
@@ -12,11 +13,16 @@ import com.fasterxml.jackson.core.type.TypeReference;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.springframework.expression.EvaluationException;
+import org.springframework.expression.ExpressionParser;
+import org.springframework.expression.spel.standard.SpelExpressionParser;
+import org.springframework.expression.spel.support.StandardEvaluationContext;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
 import java.time.LocalDateTime;
 import java.util.HashMap;
+import java.util.List;
 import java.util.Map;
 import java.util.UUID;
 
@@ -30,6 +36,7 @@ public class TransitionService {
     private final OutboxEventRepository outboxRepository;
     private final ProcessDefinitionRepository definitionRepository;
     private final ObjectMapper objectMapper;
+    private final ExpressionParser spelParser = new SpelExpressionParser();
 
     public TransitionService(ProcessInstanceRepository repository,
                              OutboxEventRepository outboxRepository,
@@ -72,11 +79,12 @@ public class TransitionService {
         ProcessDefinition definition = definitionRepository.findByName(instance.getDefinitionName())
                 .orElseThrow(() -> new IllegalArgumentException("Unknown definition: " + instance.getDefinitionName()));
 
-        Map<String, String> transitions = deserializeTransitions(definition.getTransitionsJson());
+        Map<String, List<TransitionRule>> transitions = deserializeTransitions(definition.getTransitionsJson());
         Map<String, Object> mergedData = mergeContext(instance.getContextData(), outputData);
         instance.setContextData(serializeContext(mergedData));
 
-        String nextStep = transitions.getOrDefault(eventType, COMPLETED_SENTINEL);
+        List<TransitionRule> rules = transitions.get(eventType);
+        String nextStep = (rules != null) ? evaluateBranches(rules, mergedData) : COMPLETED_SENTINEL;
 
         if (COMPLETED_SENTINEL.equals(nextStep)) {
             instance.setCurrentStep(COMPLETED_SENTINEL);
@@ -93,9 +101,38 @@ public class TransitionService {
         }
     }
 
-    private Map<String, String> deserializeTransitions(String transitionsJson) {
+    /**
+     * Evaluates branches top-to-bottom and returns the {@code next} of the first matching rule.
+     * A null or blank condition is an unconditional default (always matches).
+     * Each context key is available in SpEL as {@code #keyName}.
+     * If no branch matches, returns {@link #COMPLETED_SENTINEL}.
+     */
+    private String evaluateBranches(List<TransitionRule> rules, Map<String, Object> context) {
+        StandardEvaluationContext evalContext = new StandardEvaluationContext();
+        context.forEach(evalContext::setVariable);
+
+        for (TransitionRule rule : rules) {
+            if (rule.condition() == null || rule.condition().isBlank()) {
+                return rule.next(); // unconditional default
+            }
+            try {
+                Boolean matches = spelParser.parseExpression(rule.condition()).getValue(evalContext, Boolean.class);
+                if (Boolean.TRUE.equals(matches)) {
+                    return rule.next();
+                }
+            } catch (EvaluationException e) {
+                log.warn("Condition evaluation failed for expression '{}': {}", rule.condition(), e.getMessage());
+            }
+        }
+
+        log.warn("No branch matched for rules {}; defaulting to COMPLETED", rules);
+        return COMPLETED_SENTINEL;
+    }
+
+    private Map<String, List<TransitionRule>> deserializeTransitions(String transitionsJson) {
         try {
-            return objectMapper.readValue(transitionsJson, new TypeReference<Map<String, String>>() {});
+            return objectMapper.readValue(transitionsJson,
+                    new TypeReference<Map<String, List<TransitionRule>>>() {});
         } catch (JsonProcessingException e) {
             throw new RuntimeException("Failed to parse transitions JSON", e);
         }

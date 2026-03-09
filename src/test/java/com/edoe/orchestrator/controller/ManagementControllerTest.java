@@ -13,6 +13,8 @@ import org.springframework.data.domain.PageRequest;
 import org.springframework.http.MediaType;
 import org.springframework.test.web.servlet.MockMvc;
 
+import com.edoe.orchestrator.dto.TransitionRule;
+
 import java.time.LocalDateTime;
 import java.util.List;
 import java.util.Map;
@@ -38,7 +40,7 @@ class ManagementControllerTest {
 
     private ProcessDefinitionResponse sampleDefinition(String name) {
         return new ProcessDefinitionResponse(1L, name, "STEP_1",
-                Map.of("STEP_1_FINISHED", "COMPLETED"),
+                Map.of("STEP_1_FINISHED", List.of(new TransitionRule(null, "COMPLETED"))),
                 LocalDateTime.now(), LocalDateTime.now());
     }
 
@@ -59,7 +61,7 @@ class ManagementControllerTest {
     @Test
     void createDefinition_returns201() throws Exception {
         ProcessDefinitionRequest req = new ProcessDefinitionRequest("NEW_FLOW", "STEP_1",
-                Map.of("STEP_1_FINISHED", "COMPLETED"));
+                Map.of("STEP_1_FINISHED", List.of(new TransitionRule(null, "COMPLETED"))));
         when(managementService.createDefinition(any())).thenReturn(sampleDefinition("NEW_FLOW"));
 
         mockMvc.perform(post("/api/definitions")

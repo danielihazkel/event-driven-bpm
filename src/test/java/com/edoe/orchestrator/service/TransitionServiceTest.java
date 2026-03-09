@@ -15,7 +15,10 @@ import org.mockito.ArgumentCaptor;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
 
+import com.edoe.orchestrator.dto.TransitionRule;
+
 import java.lang.reflect.Field;
+import java.util.List;
 import java.util.Map;
 import java.util.Optional;
 import java.util.UUID;
@@ -40,7 +43,7 @@ class TransitionServiceTest {
     private final ObjectMapper objectMapper = new ObjectMapper();
 
     private static final String TRANSITIONS_JSON =
-            "{\"STEP_1_FINISHED\":\"STEP_2\",\"STEP_2_FINISHED\":\"COMPLETED\"}";
+            "{\"STEP_1_FINISHED\":[{\"next\":\"STEP_2\"}],\"STEP_2_FINISHED\":[{\"next\":\"COMPLETED\"}]}";
 
     @BeforeEach
     void setUp() {
@@ -189,7 +192,7 @@ class TransitionServiceTest {
     void startProcess_usesDefinitionInitialStep() {
         UUID id = UUID.randomUUID();
         ProcessDefinition def = new ProcessDefinition("CUSTOM_FLOW", "INIT_STEP",
-                "{\"INIT_STEP_FINISHED\":\"COMPLETED\"}");
+                "{\"INIT_STEP_FINISHED\":[{\"next\":\"COMPLETED\"}]}");
         when(definitionRepository.findByName("CUSTOM_FLOW")).thenReturn(Optional.of(def));
         when(repository.saveAndFlush(any())).thenAnswer(inv -> {
             ProcessInstance pi = inv.getArgument(0);
@@ -235,5 +238,47 @@ class TransitionServiceTest {
 
         assertThat(inst.getCompletedAt()).isNotNull();
         assertThat(inst.getStatus()).isEqualTo(ProcessStatus.COMPLETED);
+    }
+
+    // 11. handleEvent with a matching conditional branch routes to that branch's next step
+    @Test
+    void handleEvent_conditionalBranch_routesToMatchingNext() throws Exception {
+        UUID id = UUID.randomUUID();
+        String condTransitions = "{\"STEP_1_FINISHED\":["
+                + "{\"condition\":\"#approved == true\",\"next\":\"APPROVE_STEP\"},"
+                + "{\"next\":\"REJECT_STEP\"}"
+                + "]}";
+        ProcessDefinition def = new ProcessDefinition("TEST_FLOW", "STEP_1", condTransitions);
+        // context_data already has approved=true
+        ProcessInstance inst = instanceWithId(id, "STEP_1", ProcessStatus.RUNNING, "{\"approved\":true}");
+        when(repository.findById(id)).thenReturn(Optional.of(inst));
+        when(repository.saveAndFlush(any())).thenAnswer(inv -> inv.getArgument(0));
+        when(definitionRepository.findByName("TEST_FLOW")).thenReturn(Optional.of(def));
+
+        transitionService.handleEvent(id.toString(), "STEP_1_FINISHED", Map.of());
+
+        assertThat(inst.getCurrentStep()).isEqualTo("APPROVE_STEP");
+        assertThat(inst.getStatus()).isEqualTo(ProcessStatus.RUNNING);
+    }
+
+    // 12. handleEvent with unmatched conditional branch falls through to unconditional default
+    @Test
+    void handleEvent_conditionalBranch_fallsThroughToDefault() throws Exception {
+        UUID id = UUID.randomUUID();
+        String condTransitions = "{\"STEP_1_FINISHED\":["
+                + "{\"condition\":\"#approved == true\",\"next\":\"APPROVE_STEP\"},"
+                + "{\"next\":\"REJECT_STEP\"}"
+                + "]}";
+        ProcessDefinition def = new ProcessDefinition("TEST_FLOW", "STEP_1", condTransitions);
+        // context_data has approved=false — first branch won't match, falls to default
+        ProcessInstance inst = instanceWithId(id, "STEP_1", ProcessStatus.RUNNING, "{\"approved\":false}");
+        when(repository.findById(id)).thenReturn(Optional.of(inst));
+        when(repository.saveAndFlush(any())).thenAnswer(inv -> inv.getArgument(0));
+        when(definitionRepository.findByName("TEST_FLOW")).thenReturn(Optional.of(def));
+
+        transitionService.handleEvent(id.toString(), "STEP_1_FINISHED", Map.of());
+
+        assertThat(inst.getCurrentStep()).isEqualTo("REJECT_STEP");
+        assertThat(inst.getStatus()).isEqualTo(ProcessStatus.RUNNING);
     }
 }
