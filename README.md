@@ -74,6 +74,7 @@ POST /start-flow
 | Saga Rollback / Compensation | Steps can map to compensation steps; on `<step>_FAILED` event, the engine will natively walk backwards and dispatch compensation commands |
 | Timer / Delay Steps | A transition rule can carry `delayMs`; the engine advances the current step but parks the process as `SCHEDULED` until a background timer fires and dispatches the command |
 | Sub-Processes (Call Activities) | A transition rule can carry `callActivity`; the engine spawns a child process from another definition, parks the parent as `WAITING_FOR_CHILD`, and automatically resumes it (with merged context) once the child completes or fails |
+| Multi-Instance (Scatter-Gather) | A transition rule can carry `multiInstanceVariable`; the engine reads that context key as a `List`, dispatches one indexed command per element (`STEP__MI__0`, `STEP__MI__1`, …), waits for all to report back, then gathers every result into `context.multiInstanceResults` before advancing to `joinStep` |
 
 ---
 
@@ -136,6 +137,30 @@ When a rule carries `delayMs`, the engine advances `currentStep` to `next` but s
 ```
 
 `delayMs` can be combined with a `condition` to apply the delay conditionally. Cancelled processes in `SCHEDULED` status are supported.
+
+### Multi-instance rule (Scatter-Gather)
+
+When a rule carries `multiInstanceVariable`, the engine reads that context key as a `List` and dynamically fans out:
+
+1. One indexed Kafka command is dispatched per element: `STEP__MI__0`, `STEP__MI__1`, …
+2. Each command's payload includes the full shared context plus `__miItem` (the element) and `__miIndex` (its position).
+3. Workers match commands by their base step name (the `__MI__N` suffix is stripped automatically).
+4. As each indexed `STEP__MI__N_FINISHED` event arrives, outputs are accumulated; duplicates are ignored.
+5. When the last instance reports, all per-instance outputs are placed in `context.multiInstanceResults` (a list) and the process advances to `joinStep`.
+
+```json
+{
+  "RECEIVE_ORDERS_FINISHED": [
+    { "multiInstanceVariable": "orderItems", "next": "PROCESS_ORDER", "joinStep": "SHIP_ORDERS" }
+  ]
+}
+```
+
+- `multiInstanceVariable`: context key holding the `List` (e.g. `"orderItems"`)
+- `next`: base step name dispatched to workers for each element
+- `joinStep`: step to advance to once all instances complete
+
+If the collection is empty or absent, the engine skips the wait entirely and jumps directly to `joinStep` with `multiInstanceResults: []`.
 
 ### Call-activity rule (Sub-Processes)
 
@@ -228,7 +253,7 @@ Process Definitions can accept a `compensations` map. If a step fails with a `_F
 
 ## Example Flows (seeded on startup)
 
-Eight example flows are upserted into the database on every app startup. They always reflect the latest engine features. Use them to experiment without creating definitions manually.
+Nine example flows are upserted into the database on every app startup. They always reflect the latest engine features. Use them to experiment without creating definitions manually.
 
 ### DEFAULT_FLOW
 
@@ -370,6 +395,26 @@ curl -s -X POST http://localhost:8080/start-flow \
   -d '{"definitionName": "SUB_PROCESS_FLOW", "initialData": {}}'
 # → {\"processId\": \"<parent-id>\"}  status=WAITING_FOR_CHILD after COLLECT_APPLICATION finishes
 # A child process (CREDIT_CHECK_SUB) is automatically started — find it via GET /api/processes?definitionName=CREDIT_CHECK_SUB
+```
+
+### SCATTER_GATHER_FLOW
+
+Demonstrates multi-instance scatter-gather. `RECEIVE_ORDERS` finishes and the engine reads `orderItems` from the process context. It dispatches one indexed command per element (`PROCESS_ORDER__MI__0`, `PROCESS_ORDER__MI__1`, …), parks the process in `MULTI_INSTANCE_WAIT`, and gathers every result into `context.multiInstanceResults` before advancing to `SHIP_ORDERS`.
+
+```
+RECEIVE_ORDERS ─┬─→ PROCESS_ORDER__MI__0 ──┐
+                ├─→ PROCESS_ORDER__MI__1 ──┤─→ (gather) → SHIP_ORDERS → COMPLETED
+                └─→ PROCESS_ORDER__MI__2 ──┘
+                     (one per orderItems element)
+```
+
+```bash
+curl -s -X POST http://localhost:8080/start-flow \
+  -H "Content-Type: application/json" \
+  -d '{"definitionName": "SCATTER_GATHER_FLOW", "initialData": {"orderItems": [{"sku": "WIDGET-A", "qty": 2}, {"sku": "WIDGET-B", "qty": 1}]}}'
+# → workers consume PROCESS_ORDER__MI__0 and PROCESS_ORDER__MI__1 in parallel
+# → after both finish, context.multiInstanceResults contains both outputs
+# → SHIP_ORDERS is dispatched automatically
 ```
 
 ---
