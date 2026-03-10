@@ -132,11 +132,23 @@ public class TransitionService {
                         + " v" + instance.getDefinitionVersion()));
 
         Map<String, List<TransitionRule>> transitions = deserializeTransitions(definition.getTransitionsJson());
-        Map<String, Object> mergedData = mergeContext(instance.getContextData(), outputData);
-        instance.setContextData(serializeContext(mergedData));
+
+        // Full merge is always computed — SpEL conditions must see the complete worker output
+        Map<String, Object> fullMerge = mergeContext(instance.getContextData(), outputData);
 
         List<TransitionRule> rules = transitions.get(eventType);
-        TransitionRule matched = (rules != null) ? evaluateBranches(rules, mergedData) : null;
+        TransitionRule matched = (rules != null) ? evaluateBranches(rules, fullMerge) : null;
+
+        // If the matched rule defines an outputMapping, persist only the mapped extractions;
+        // otherwise persist the full merge (backward-compatible default behaviour)
+        Map<String, Object> mergedData;
+        if (matched != null && matched.hasOutputMapping()) {
+            Map<String, Object> mappedOutput = applyOutputMapping(outputData, matched.outputMapping());
+            mergedData = mergeContext(instance.getContextData(), mappedOutput);
+        } else {
+            mergedData = fullMerge;
+        }
+        instance.setContextData(serializeContext(mergedData));
 
         if (matched != null && matched.isFork()) {
             dispatchFork(instance, matched.parallel(), matched.joinStep(), mergedData);
@@ -654,6 +666,39 @@ public class TransitionService {
         } catch (JsonProcessingException e) {
             throw new RuntimeException("Failed to parse transitions JSON", e);
         }
+    }
+
+    /**
+     * Applies JSONPath expressions to the raw worker output and returns a new map
+     * containing only the mapped extractions. Keys not present in {@code mapping}
+     * are silently discarded. Missing JSONPath paths are logged at DEBUG and skipped.
+     */
+    private Map<String, Object> applyOutputMapping(Map<String, Object> output,
+            Map<String, String> mapping) {
+        Map<String, Object> result = new HashMap<>();
+        if (output == null || output.isEmpty()) {
+            return result;
+        }
+        String outputJson;
+        try {
+            outputJson = objectMapper.writeValueAsString(output);
+        } catch (JsonProcessingException e) {
+            log.warn("applyOutputMapping: failed to serialize worker output: {}", e.getMessage());
+            return result;
+        }
+        for (Map.Entry<String, String> entry : mapping.entrySet()) {
+            try {
+                Object value = com.jayway.jsonpath.JsonPath.read(outputJson, entry.getValue());
+                result.put(entry.getKey(), value);
+            } catch (com.jayway.jsonpath.PathNotFoundException e) {
+                log.debug("applyOutputMapping: path '{}' not found for key '{}', skipping",
+                        entry.getValue(), entry.getKey());
+            } catch (Exception e) {
+                log.warn("applyOutputMapping: path '{}' evaluation failed for key '{}': {}",
+                        entry.getValue(), entry.getKey(), e.getMessage());
+            }
+        }
+        return result;
     }
 
     private Map<String, Object> mergeContext(String existingJson, Map<String, Object> newData) {

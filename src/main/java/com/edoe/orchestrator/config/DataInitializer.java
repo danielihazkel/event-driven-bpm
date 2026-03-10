@@ -73,7 +73,11 @@ public class DataInitializer implements CommandLineRunner {
     private void seedLoanApproval() {
         upsert("LOAN_APPROVAL", "VALIDATE_CREDIT", Map.of(
                 "VALIDATE_CREDIT_FINISHED", List.of(
-                        TransitionRule.of("#creditScore > 700", "AUTO_APPROVE"),
+                        // ofMapped: only creditScore + creditBureau are persisted to context;
+                        // other worker output fields (e.g. rawFlags, reportId) are discarded
+                        TransitionRule.ofMapped("#creditScore > 700", "AUTO_APPROVE",
+                                Map.of("creditScore",  "$.creditScore",
+                                       "creditBureau", "$.meta.bureau")),
                         TransitionRule.suspend(null, "MANUAL_REVIEW") // suspend: awaits signal
                 ),
                 "AUTO_APPROVE_FINISHED", List.of(

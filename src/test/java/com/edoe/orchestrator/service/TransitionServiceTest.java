@@ -1024,4 +1024,126 @@ class TransitionServiceTest {
         // No outbox event for parent (it completed, not transitioned)
         verifyNoInteractions(outboxRepository);
     }
+
+    // ── Phase 11: Context Mapping & JSONPath Filtering ──────────────────────────
+
+    @Test
+    void handleEvent_withOutputMapping_extractsMappedKeys() throws Exception {
+        UUID id = UUID.randomUUID();
+        String transJson = "{\"STEP_1_FINISHED\":[{\"condition\":null,\"next\":\"STEP_2\"," +
+                "\"outputMapping\":{\"creditScore\":\"$.score\",\"bureau\":\"$.meta.source\"}}]}";
+        ProcessDefinition def = new ProcessDefinition("TEST_FLOW", "STEP_1", transJson);
+        ProcessInstance inst = instanceWithId(id, "STEP_1", ProcessStatus.RUNNING, "{\"userId\":\"u1\"}");
+
+        when(repository.findById(id)).thenReturn(Optional.of(inst));
+        when(repository.saveAndFlush(any())).thenAnswer(inv -> inv.getArgument(0));
+        when(outboxRepository.save(any())).thenAnswer(inv -> inv.getArgument(0));
+        when(definitionRepository.findByNameAndVersion("TEST_FLOW", 1)).thenReturn(Optional.of(def));
+
+        transitionService.handleEvent(id.toString(), "STEP_1_FINISHED",
+                Map.of("score", 742, "meta", Map.of("source", "Equifax"), "rawFlags", List.of("OK")));
+
+        @SuppressWarnings("unchecked")
+        Map<String, Object> ctx = objectMapper.readValue(inst.getContextData(), Map.class);
+        assertThat(ctx).containsEntry("creditScore", 742);
+        assertThat(ctx).containsEntry("bureau", "Equifax");
+        assertThat(ctx).containsEntry("userId", "u1");   // pre-existing key preserved
+    }
+
+    @Test
+    void handleEvent_withOutputMapping_discardsUnmappedKeys() throws Exception {
+        UUID id = UUID.randomUUID();
+        String transJson = "{\"STEP_1_FINISHED\":[{\"condition\":null,\"next\":\"STEP_2\"," +
+                "\"outputMapping\":{\"creditScore\":\"$.score\"}}]}";
+        ProcessDefinition def = new ProcessDefinition("TEST_FLOW", "STEP_1", transJson);
+        ProcessInstance inst = instanceWithId(id, "STEP_1", ProcessStatus.RUNNING, "{}");
+
+        when(repository.findById(id)).thenReturn(Optional.of(inst));
+        when(repository.saveAndFlush(any())).thenAnswer(inv -> inv.getArgument(0));
+        when(outboxRepository.save(any())).thenAnswer(inv -> inv.getArgument(0));
+        when(definitionRepository.findByNameAndVersion("TEST_FLOW", 1)).thenReturn(Optional.of(def));
+
+        transitionService.handleEvent(id.toString(), "STEP_1_FINISHED",
+                Map.of("score", 700, "rawReport", "FULL_REPORT_TEXT", "flags", List.of("A", "B")));
+
+        @SuppressWarnings("unchecked")
+        Map<String, Object> ctx = objectMapper.readValue(inst.getContextData(), Map.class);
+        assertThat(ctx).containsKey("creditScore");
+        assertThat(ctx).doesNotContainKey("rawReport");
+        assertThat(ctx).doesNotContainKey("flags");
+        assertThat(ctx).doesNotContainKey("score");  // original key name discarded, mapped to creditScore
+    }
+
+    @Test
+    void handleEvent_withNullOutputMapping_fullMerge() throws Exception {
+        UUID id = UUID.randomUUID();
+        // Plain of() rule — no outputMapping
+        ProcessDefinition def = new ProcessDefinition("TEST_FLOW", "STEP_1", TRANSITIONS_JSON);
+        ProcessInstance inst = instanceWithId(id, "STEP_1", ProcessStatus.RUNNING, "{\"userId\":\"u1\"}");
+
+        when(repository.findById(id)).thenReturn(Optional.of(inst));
+        when(repository.saveAndFlush(any())).thenAnswer(inv -> inv.getArgument(0));
+        when(outboxRepository.save(any())).thenAnswer(inv -> inv.getArgument(0));
+        when(definitionRepository.findByNameAndVersion("TEST_FLOW", 1)).thenReturn(Optional.of(def));
+
+        transitionService.handleEvent(id.toString(), "STEP_1_FINISHED",
+                Map.of("result", "ok", "extra", "noise"));
+
+        @SuppressWarnings("unchecked")
+        Map<String, Object> ctx = objectMapper.readValue(inst.getContextData(), Map.class);
+        assertThat(ctx).containsEntry("userId", "u1");
+        assertThat(ctx).containsEntry("result", "ok");
+        assertThat(ctx).containsEntry("extra", "noise");  // full merge — nothing discarded
+    }
+
+    @Test
+    void handleEvent_withOutputMapping_missingJsonPath_silentlySkips() throws Exception {
+        UUID id = UUID.randomUUID();
+        String transJson = "{\"STEP_1_FINISHED\":[{\"condition\":null,\"next\":\"STEP_2\"," +
+                "\"outputMapping\":{\"creditScore\":\"$.score\",\"missing\":\"$.does.not.exist\"}}]}";
+        ProcessDefinition def = new ProcessDefinition("TEST_FLOW", "STEP_1", transJson);
+        ProcessInstance inst = instanceWithId(id, "STEP_1", ProcessStatus.RUNNING, "{}");
+
+        when(repository.findById(id)).thenReturn(Optional.of(inst));
+        when(repository.saveAndFlush(any())).thenAnswer(inv -> inv.getArgument(0));
+        when(outboxRepository.save(any())).thenAnswer(inv -> inv.getArgument(0));
+        when(definitionRepository.findByNameAndVersion("TEST_FLOW", 1)).thenReturn(Optional.of(def));
+
+        // Should not throw even though $.does.not.exist is missing
+        assertThatNoException().isThrownBy(() ->
+                transitionService.handleEvent(id.toString(), "STEP_1_FINISHED", Map.of("score", 600)));
+
+        @SuppressWarnings("unchecked")
+        Map<String, Object> ctx = objectMapper.readValue(inst.getContextData(), Map.class);
+        assertThat(ctx).containsEntry("creditScore", 600);
+        assertThat(ctx).doesNotContainKey("missing");
+    }
+
+    @Test
+    void handleEvent_spelConditionEvaluatesOnFullWorkerOutput() throws Exception {
+        UUID id = UUID.randomUUID();
+        // Condition uses #score (original key); mapping renames it to creditScore in context
+        String transJson = "{\"STEP_1_FINISHED\":["
+                + "{\"condition\":\"#score > 700\",\"next\":\"HIGH_SCORE\","
+                + "\"outputMapping\":{\"creditScore\":\"$.score\"}},"
+                + "{\"next\":\"LOW_SCORE\"}"
+                + "]}";
+        ProcessDefinition def = new ProcessDefinition("TEST_FLOW", "STEP_1", transJson);
+        ProcessInstance inst = instanceWithId(id, "STEP_1", ProcessStatus.RUNNING, "{}");
+
+        when(repository.findById(id)).thenReturn(Optional.of(inst));
+        when(repository.saveAndFlush(any())).thenAnswer(inv -> inv.getArgument(0));
+        when(outboxRepository.save(any())).thenAnswer(inv -> inv.getArgument(0));
+        when(definitionRepository.findByNameAndVersion("TEST_FLOW", 1)).thenReturn(Optional.of(def));
+
+        transitionService.handleEvent(id.toString(), "STEP_1_FINISHED", Map.of("score", 800));
+
+        // SpEL condition #score > 700 should have matched HIGH_SCORE
+        assertThat(inst.getCurrentStep()).isEqualTo("HIGH_SCORE");
+        @SuppressWarnings("unchecked")
+        Map<String, Object> ctx = objectMapper.readValue(inst.getContextData(), Map.class);
+        // Only mapped key present — original 'score' key discarded
+        assertThat(ctx).containsEntry("creditScore", 800);
+        assertThat(ctx).doesNotContainKey("score");
+    }
 }

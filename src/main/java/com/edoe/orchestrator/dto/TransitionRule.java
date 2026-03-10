@@ -5,6 +5,7 @@ import com.fasterxml.jackson.annotation.JsonInclude;
 import io.swagger.v3.oas.annotations.media.Schema;
 
 import java.util.List;
+import java.util.Map;
 
 /**
  * One branch in a conditional transition.
@@ -95,31 +96,35 @@ public record TransitionRule(
         String callActivity,
 
         @Schema(description = "For multi-instance rules: context key holding a List. The engine dispatches one command per element (step name from 'next') and gathers results into multiInstanceResults before advancing to 'joinStep'.")
-        String multiInstanceVariable) {
+        String multiInstanceVariable,
+
+        @Schema(description = "Optional JSONPath-based output mapping. Keys are target context variable names; values are JSONPath expressions evaluated against the raw worker output. When set, only the mapped fields are written to context_data (unmapped worker output is discarded). When null, the full worker output is shallow-merged (backward-compatible default).",
+                example = "{\"creditScore\": \"$.score\", \"creditBureau\": \"$.meta.bureau\"}")
+        Map<String, String> outputMapping) {
 
     /** Factory for single-next rules (the common case). */
     public static TransitionRule of(String condition, String next) {
-        return new TransitionRule(condition, next, null, null, null, null, null, null);
+        return new TransitionRule(condition, next, null, null, null, null, null, null, null);
     }
 
     /** Factory for fork rules — fans out to all parallel steps, then joins at joinStep. */
     public static TransitionRule fork(List<String> parallel, String joinStep) {
-        return new TransitionRule(null, null, parallel, joinStep, null, null, null, null);
+        return new TransitionRule(null, null, parallel, joinStep, null, null, null, null, null);
     }
 
     /** Factory for suspend rules — routes to suspendStep and halts there until a signal arrives. */
     public static TransitionRule suspend(String condition, String suspendStep) {
-        return new TransitionRule(condition, suspendStep, null, null, Boolean.TRUE, null, null, null);
+        return new TransitionRule(condition, suspendStep, null, null, Boolean.TRUE, null, null, null, null);
     }
 
     /** Factory for delay rules — advances to next after delayMs milliseconds. */
     public static TransitionRule delay(Long delayMs, String next) {
-        return new TransitionRule(null, next, null, null, null, delayMs, null, null);
+        return new TransitionRule(null, next, null, null, null, delayMs, null, null, null);
     }
 
     /** Factory for call-activity rules — spawns a child process, then advances parent to nextAfterChild. */
     public static TransitionRule callActivity(String condition, String childDefinition, String nextAfterChild) {
-        return new TransitionRule(condition, nextAfterChild, null, null, null, null, childDefinition, null);
+        return new TransitionRule(condition, nextAfterChild, null, null, null, null, childDefinition, null, null);
     }
 
     /**
@@ -128,14 +133,31 @@ public record TransitionRule(
      * {@code miStep__MI__N} command per element, then advances to {@code joinStep}.
      */
     public static TransitionRule multiInstance(String multiInstanceVariable, String miStep, String joinStep) {
-        return new TransitionRule(null, miStep, null, joinStep, null, null, null, multiInstanceVariable);
+        return new TransitionRule(null, miStep, null, joinStep, null, null, null, multiInstanceVariable, null);
     }
 
     /**
      * Conditional variant of the multi-instance factory.
      */
     public static TransitionRule multiInstance(String condition, String multiInstanceVariable, String miStep, String joinStep) {
-        return new TransitionRule(condition, miStep, null, joinStep, null, null, null, multiInstanceVariable);
+        return new TransitionRule(condition, miStep, null, joinStep, null, null, null, multiInstanceVariable, null);
+    }
+
+    /**
+     * Factory for single-next rules with precise JSONPath output mapping.
+     * Only the context variables named in {@code outputMapping} are extracted
+     * from the worker output and persisted to {@code context_data}; all other
+     * worker output fields are discarded.
+     *
+     * <p>Example — extract {@code $.score} and {@code $.meta.bureau} from the
+     * worker output and place them under {@code creditScore} / {@code creditBureau}:
+     * <pre>
+     * TransitionRule.ofMapped("#creditScore > 700", "AUTO_APPROVE",
+     *     Map.of("creditScore", "$.score", "creditBureau", "$.meta.bureau"))
+     * </pre></p>
+     */
+    public static TransitionRule ofMapped(String condition, String next, Map<String, String> outputMapping) {
+        return new TransitionRule(condition, next, null, null, null, null, null, null, outputMapping);
     }
 
     /** Returns true if this rule represents a parallel fork. */
@@ -180,5 +202,15 @@ public record TransitionRule(
     @JsonIgnore
     public boolean isMultiInstanceRule() {
         return multiInstanceVariable != null && !multiInstanceVariable.isBlank();
+    }
+
+    /**
+     * Returns true if this rule has an explicit JSONPath output mapping.
+     * Named {@code hasOutputMapping} (not {@code isOutputMapping}) to avoid
+     * any Java Bean getter collision with the {@code outputMapping} component.
+     */
+    @JsonIgnore
+    public boolean hasOutputMapping() {
+        return outputMapping != null && !outputMapping.isEmpty();
     }
 }

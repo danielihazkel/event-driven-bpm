@@ -76,6 +76,7 @@ POST /start-flow
 | Sub-Processes (Call Activities) | A transition rule can carry `callActivity`; the engine spawns a child process from another definition, parks the parent as `WAITING_FOR_CHILD`, and automatically resumes it (with merged context) once the child completes or fails |
 | Multi-Instance (Scatter-Gather) | A transition rule can carry `multiInstanceVariable`; the engine reads that context key as a `List`, dispatches one indexed command per element (`STEP__MI__0`, `STEP__MI__1`, …), waits for all to report back, then gathers every result into `context.multiInstanceResults` before advancing to `joinStep` |
 | Process Versioning | `PUT /api/definitions/{name}` inserts a new version row instead of mutating the existing one. Each process instance stores the `definitionVersion` it started with; in-flight instances continue to evaluate transitions from their snapshot version, unaffected by later updates |
+| Output Mapping (JSONPath) | A transition rule can carry `outputMapping` — a map of target context key → JSONPath expression. When set, only the mapped fields from the worker output are persisted to `context_data`; unmapped fields are discarded. SpEL conditions still evaluate against the full worker output, so conditions and mappings are fully independent |
 
 ---
 
@@ -183,6 +184,32 @@ If the child fails, the failure propagates to the parent (triggering the parent'
 `callActivity` can be combined with a `condition` so the sub-process is only invoked when the condition matches — the next unconditional branch acts as the bypass path.
 
 Cancelling a parent in `WAITING_FOR_CHILD` cascades the cancellation to any active child processes.
+
+### Output mapping rule (JSONPath filtering)
+
+By default, a worker's entire output is shallow-merged into `context_data`. Add `outputMapping` to any rule to extract only the fields you care about, discarding the rest:
+
+```json
+{
+  "VALIDATE_CREDIT_FINISHED": [
+    {
+      "condition": "#creditScore > 700",
+      "next": "AUTO_APPROVE",
+      "outputMapping": {
+        "creditScore":  "$.creditScore",
+        "creditBureau": "$.meta.bureau"
+      }
+    },
+    { "next": "MANUAL_REVIEW", "suspend": true }
+  ]
+}
+```
+
+- Keys in `outputMapping` are the target variable names written to `context_data`.
+- Values are [JSONPath](https://goessner.net/articles/JsonPath/) expressions evaluated against the raw worker output.
+- If a path is missing from the worker output, the key is silently omitted (no error).
+- SpEL conditions (e.g. `#creditScore > 700`) are evaluated against the **full** worker output before the mapping is applied, so conditions can reference any worker field regardless of whether it appears in `outputMapping`.
+- When `outputMapping` is omitted, the existing full shallow-merge behaviour is preserved (backward-compatible).
 
 ### Compensations (Saga Rollback)
 
@@ -516,7 +543,7 @@ src/main/java/com/edoe/orchestrator/
 │   ├── ProcessDefinitionResponse.java
 │   ├── ProcessInstanceResponse.java
 │   ├── StartFlowRequest.java
-│   └── TransitionRule.java          # Branch rule: {condition, next}, {parallel, joinStep}, {suspend}, {delayMs, next}, or {callActivity, next}
+│   └── TransitionRule.java          # Branch rule: {condition, next}, {parallel, joinStep}, {suspend}, {delayMs, next}, {callActivity, next}, or {outputMapping}
 ├── entity/
 │   ├── OutboxEvent.java             # outbox_events table
 │   ├── ProcessDefinition.java       # process_definitions table
