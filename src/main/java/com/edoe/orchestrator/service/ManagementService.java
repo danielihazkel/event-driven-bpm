@@ -1,7 +1,9 @@
 package com.edoe.orchestrator.service;
 
 import com.edoe.orchestrator.dto.*;
+import com.edoe.orchestrator.entity.AuditEventType;
 import com.edoe.orchestrator.entity.OutboxEvent;
+import com.edoe.orchestrator.entity.ProcessAuditLog;
 import com.edoe.orchestrator.entity.ProcessDefinition;
 import com.edoe.orchestrator.entity.ProcessInstance;
 import com.edoe.orchestrator.entity.ProcessStatus;
@@ -33,6 +35,7 @@ public class ManagementService {
     private final OutboxEventRepository outboxRepository;
     private final TransitionService transitionService;
     private final ObjectMapper objectMapper;
+    private final AuditLogService auditLogService;
 
     // --- Process Definitions ---
 
@@ -114,10 +117,13 @@ public class ManagementService {
                 && instance.getStatus() != ProcessStatus.WAITING_FOR_CHILD) {
             throw new IllegalStateException("Cannot cancel process in status: " + instance.getStatus());
         }
+        ProcessStatus fromStatus = instance.getStatus();
         instance.setStatus(ProcessStatus.CANCELLED);
         instance.setWakeAt(null);
         instance.setCompletedAt(LocalDateTime.now());
         instanceRepository.saveAndFlush(instance);
+        auditLogService.record(id, AuditEventType.PROCESS_CANCELLED, instance.getCurrentStep(),
+                fromStatus, ProcessStatus.CANCELLED, null);
 
         // Cascade cancel to any running child processes
         for (ProcessInstance child : instanceRepository.findByParentProcessId(id)) {
@@ -125,9 +131,12 @@ public class ManagementService {
                     || child.getStatus() == ProcessStatus.SCHEDULED
                     || child.getStatus() == ProcessStatus.SUSPENDED
                     || child.getStatus() == ProcessStatus.WAITING_FOR_CHILD) {
+                ProcessStatus childFromStatus = child.getStatus();
                 child.setStatus(ProcessStatus.CANCELLED);
                 child.setCompletedAt(LocalDateTime.now());
                 instanceRepository.saveAndFlush(child);
+                auditLogService.record(child.getId(), AuditEventType.PROCESS_CANCELLED, child.getCurrentStep(),
+                        childFromStatus, ProcessStatus.CANCELLED, Map.of("cancelledByParent", id.toString()));
             }
         }
 
@@ -146,6 +155,8 @@ public class ManagementService {
         instance.setStepStartedAt(LocalDateTime.now());
         instanceRepository.saveAndFlush(instance);
         outboxRepository.save(new OutboxEvent(id.toString(), instance.getCurrentStep(), instance.getContextData()));
+        auditLogService.record(id, AuditEventType.PROCESS_WOKEN, instance.getCurrentStep(),
+                ProcessStatus.SCHEDULED, ProcessStatus.RUNNING, null);
         return toInstanceResponse(instance);
     }
 
@@ -156,10 +167,13 @@ public class ManagementService {
         if (instance.getStatus() != ProcessStatus.FAILED && instance.getStatus() != ProcessStatus.STALLED) {
             throw new IllegalStateException("Cannot retry process in status: " + instance.getStatus());
         }
+        ProcessStatus fromStatus = instance.getStatus();
         instance.setStatus(ProcessStatus.RUNNING);
         instance.setStepStartedAt(LocalDateTime.now());
         instanceRepository.saveAndFlush(instance);
         outboxRepository.save(new OutboxEvent(id.toString(), instance.getCurrentStep(), instance.getContextData()));
+        auditLogService.record(id, AuditEventType.PROCESS_RETRIED, instance.getCurrentStep(),
+                fromStatus, ProcessStatus.RUNNING, null);
         return toInstanceResponse(instance);
     }
 
@@ -189,6 +203,17 @@ public class ManagementService {
         return toInstanceResponse(instance);
     }
 
+    // --- Audit Trail ---
+
+    public List<AuditLogResponse> getAuditTrail(UUID id) {
+        if (!instanceRepository.existsById(id)) {
+            throw new NoSuchElementException("Process not found: " + id);
+        }
+        return auditLogService.getAuditTrail(id).stream()
+                .map(this::toAuditLogResponse)
+                .toList();
+    }
+
     // --- Metrics ---
 
     public MetricsSummaryResponse getMetricsSummary() {
@@ -206,6 +231,11 @@ public class ManagementService {
     }
 
     // --- Mapping helpers ---
+
+    private AuditLogResponse toAuditLogResponse(ProcessAuditLog log) {
+        return new AuditLogResponse(log.getId(), log.getProcessId(), log.getEventType(),
+                log.getStepName(), log.getFromStatus(), log.getToStatus(), log.getPayload(), log.getOccurredAt());
+    }
 
     private ProcessDefinitionResponse toDefinitionResponse(ProcessDefinition def) {
         Map<String, List<TransitionRule>> transitions = deserializeTransitions(def.getTransitionsJson());

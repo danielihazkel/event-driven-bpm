@@ -2,6 +2,8 @@ package com.edoe.orchestrator.listener;
 
 import com.edoe.orchestrator.config.KafkaTopicConfig;
 import com.edoe.orchestrator.dto.OrchestratorMessage;
+import com.edoe.orchestrator.entity.AuditEventType;
+import com.edoe.orchestrator.service.AuditLogService;
 import com.edoe.orchestrator.service.TransitionService;
 import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.databind.ObjectMapper;
@@ -12,6 +14,9 @@ import org.apache.kafka.common.header.Header;
 import org.springframework.kafka.annotation.KafkaListener;
 import org.springframework.stereotype.Component;
 
+import java.util.Map;
+import java.util.UUID;
+
 import static java.nio.charset.StandardCharsets.UTF_8;
 
 @Slf4j
@@ -21,6 +26,7 @@ public class WorkerEventListener {
 
     private final TransitionService transitionService;
     private final ObjectMapper objectMapper;
+    private final AuditLogService auditLogService;
 
     @KafkaListener(
             topics = KafkaTopicConfig.WORKER_EVENTS_TOPIC,
@@ -38,6 +44,13 @@ public class WorkerEventListener {
         if (processId == null) {
             log.error("No processId found in event, skipping. offset={}", record.offset());
             return;
+        }
+
+        try {
+            auditLogService.record(UUID.fromString(processId), AuditEventType.EVENT_RECEIVED,
+                    message.type(), null, null, Map.of("offset", record.offset()));
+        } catch (IllegalArgumentException ignore) {
+            // processId is not a valid UUID — skip audit
         }
 
         transitionService.handleEvent(processId, message.type(), message.data());

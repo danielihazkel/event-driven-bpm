@@ -25,12 +25,15 @@ class OutboxPublisherServiceTest {
     @Mock
     private CommandPublisherService commandPublisher;
 
+    @Mock
+    private AuditLogService auditLogService;
+
     private OutboxPublisherService outboxPublisherService;
     private final ObjectMapper objectMapper = new ObjectMapper();
 
     @BeforeEach
     void setUp() {
-        outboxPublisherService = new OutboxPublisherService(outboxRepository, commandPublisher, objectMapper);
+        outboxPublisherService = new OutboxPublisherService(outboxRepository, commandPublisher, objectMapper, auditLogService);
     }
 
     @Test

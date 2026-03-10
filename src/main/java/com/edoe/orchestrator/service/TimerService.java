@@ -1,5 +1,6 @@
 package com.edoe.orchestrator.service;
 
+import com.edoe.orchestrator.entity.AuditEventType;
 import com.edoe.orchestrator.entity.OutboxEvent;
 import com.edoe.orchestrator.entity.ProcessInstance;
 import com.edoe.orchestrator.entity.ProcessStatus;
@@ -28,6 +29,7 @@ public class TimerService {
 
     private final ProcessInstanceRepository instanceRepository;
     private final OutboxEventRepository outboxRepository;
+    private final AuditLogService auditLogService;
 
     @Scheduled(fixedDelayString = "${edoe.orchestrator.timer-poll-interval-ms:5000}")
     @Transactional
@@ -50,6 +52,8 @@ public class TimerService {
                     instance.getId().toString(),
                     instance.getCurrentStep(),
                     instance.getContextData()));
+            auditLogService.record(instance.getId(), AuditEventType.PROCESS_TIMER_FIRED, instance.getCurrentStep(),
+                    ProcessStatus.SCHEDULED, ProcessStatus.RUNNING, null);
             log.info("Process {} woken from timer, dispatching step {}", instance.getId(), instance.getCurrentStep());
         }
     }

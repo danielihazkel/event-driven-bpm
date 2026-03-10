@@ -1,6 +1,7 @@
 package com.edoe.orchestrator.service;
 
 import com.edoe.orchestrator.dto.TransitionRule;
+import com.edoe.orchestrator.entity.AuditEventType;
 import com.edoe.orchestrator.entity.OutboxEvent;
 import com.edoe.orchestrator.entity.ProcessDefinition;
 import com.edoe.orchestrator.entity.ProcessInstance;
@@ -41,6 +42,7 @@ public class TransitionService {
     private final OutboxEventRepository outboxRepository;
     private final ProcessDefinitionRepository definitionRepository;
     private final ObjectMapper objectMapper;
+    private final AuditLogService auditLogService;
     private final ExpressionParser spelParser = new SpelExpressionParser();
 
     @Transactional
@@ -58,6 +60,8 @@ public class TransitionService {
         ProcessInstance instance = new ProcessInstance(definitionName, definition.getVersion(), initialStep, contextJson, ProcessStatus.RUNNING);
         repository.saveAndFlush(instance);
         outboxRepository.save(new OutboxEvent(instance.getId().toString(), initialStep, contextJson));
+        auditLogService.record(instance.getId(), AuditEventType.PROCESS_STARTED, initialStep,
+                null, ProcessStatus.RUNNING, Map.of("definitionName", definitionName, "version", definition.getVersion()));
         log.debug("Started process {} v{} id={}", definitionName, definition.getVersion(), instance.getId());
         return instance.getId();
     }
@@ -165,10 +169,13 @@ public class TransitionService {
             if (COMPLETED_SENTINEL.equals(nextStep)) {
                 completeProcess(instance);
             } else {
+                String fromStep = instance.getCurrentStep();
                 instance.setCurrentStep(nextStep);
                 instance.setStepStartedAt(LocalDateTime.now());
                 repository.saveAndFlush(instance);
                 outboxRepository.save(new OutboxEvent(processId, nextStep, serializeContext(mergedData)));
+                auditLogService.record(uuid, AuditEventType.STEP_TRANSITION, nextStep,
+                        ProcessStatus.RUNNING, ProcessStatus.RUNNING, Map.of("fromStep", fromStep, "toStep", nextStep));
                 log.debug("Process {} transitioned to step {}", processId, nextStep);
             }
         }
@@ -192,6 +199,9 @@ public class TransitionService {
             throw new IllegalStateException(
                     "Cannot signal process " + processId + " in status: " + instance.getStatus());
         }
+
+        auditLogService.record(uuid, AuditEventType.SIGNAL_RECEIVED, instance.getCurrentStep(),
+                null, null, Map.of("signal", signalEvent));
 
         ProcessDefinition definition = definitionRepository.findByNameAndVersion(instance.getDefinitionName(), instance.getDefinitionVersion())
                 .orElseThrow(() -> new IllegalArgumentException(
@@ -227,6 +237,8 @@ public class TransitionService {
                 instance.setStepStartedAt(LocalDateTime.now());
                 repository.saveAndFlush(instance);
                 outboxRepository.save(new OutboxEvent(processId, nextStep, serializeContext(mergedData)));
+                auditLogService.record(uuid, AuditEventType.PROCESS_RESUMED, nextStep,
+                        ProcessStatus.SUSPENDED, ProcessStatus.RUNNING, Map.of("signal", signalEvent, "toStep", nextStep));
                 log.info("Process {} resumed from signal {}, transitioned to step {}",
                         processId, signalEvent, nextStep);
             }
@@ -242,11 +254,14 @@ public class TransitionService {
      * No outbox command is written — the process waits for an external signal.
      */
     private void suspendProcess(ProcessInstance instance, String suspendStep, Map<String, Object> context) {
+        ProcessStatus fromStatus = instance.getStatus();
         instance.setCurrentStep(suspendStep);
         instance.setStatus(ProcessStatus.SUSPENDED);
         instance.setStepStartedAt(LocalDateTime.now());
         instance.setContextData(serializeContext(context));
         repository.saveAndFlush(instance);
+        auditLogService.record(instance.getId(), AuditEventType.PROCESS_SUSPENDED, suspendStep,
+                fromStatus, ProcessStatus.SUSPENDED, null);
         log.info("Process {} suspended at step {}", instance.getId(), suspendStep);
     }
 
@@ -267,6 +282,9 @@ public class TransitionService {
         instance.setStepStartedAt(LocalDateTime.now());
         instance.setContextData(serializeContext(context));
         repository.saveAndFlush(instance);
+        auditLogService.record(instance.getId(), AuditEventType.PROCESS_SCHEDULED, nextStep,
+                ProcessStatus.RUNNING, ProcessStatus.SCHEDULED,
+                Map.of("delayMs", delayMs, "wakeAt", instance.getWakeAt().toString()));
         log.info("Process {} scheduled at step {} — will wake at {}", instance.getId(), nextStep,
                 instance.getWakeAt());
     }
@@ -292,6 +310,9 @@ public class TransitionService {
         for (String step : parallelSteps) {
             outboxRepository.save(new OutboxEvent(instance.getId().toString(), step, contextJson));
         }
+        auditLogService.record(instance.getId(), AuditEventType.FORK_DISPATCHED, PARALLEL_WAIT,
+                ProcessStatus.RUNNING, ProcessStatus.RUNNING,
+                Map.of("branches", parallelSteps.size(), "joinStep", joinStep));
         log.debug("Process {} forked into {} parallel branches: {}", instance.getId(), parallelSteps.size(),
                 parallelSteps);
     }
@@ -329,9 +350,13 @@ public class TransitionService {
             instance.setStepStartedAt(LocalDateTime.now());
             repository.saveAndFlush(instance);
             outboxRepository.save(new OutboxEvent(instance.getId().toString(), joinStep, serializeContext(mergedData)));
+            auditLogService.record(instance.getId(), AuditEventType.FORK_JOINED, joinStep,
+                    ProcessStatus.RUNNING, ProcessStatus.RUNNING, null);
             log.debug("Process {} fork joined, transitioning to {}", instance.getId(), joinStep);
         } else {
             repository.saveAndFlush(instance);
+            auditLogService.record(instance.getId(), AuditEventType.FORK_BRANCH_COMPLETED, eventType,
+                    ProcessStatus.RUNNING, ProcessStatus.RUNNING, Map.of("remaining", remaining));
             log.debug("Process {} parallel branch {} completed, {} remaining",
                     instance.getId(), eventType, remaining);
         }
@@ -388,6 +413,9 @@ public class TransitionService {
             itemContext.put("__miIndex", i);
             outboxRepository.save(new OutboxEvent(instance.getId().toString(), commandType, serializeContext(itemContext)));
         }
+        auditLogService.record(instance.getId(), AuditEventType.MULTI_INSTANCE_DISPATCHED, miStep,
+                ProcessStatus.RUNNING, ProcessStatus.RUNNING,
+                Map.of("count", items.size(), "joinStep", joinStep));
         log.info("Process {} multi-instance scatter: {} × {} instances (joinStep={})",
                 instance.getId(), items.size(), miStep, joinStep);
     }
@@ -436,9 +464,13 @@ public class TransitionService {
             instance.setContextData(serializeContext(mergedData));
             repository.saveAndFlush(instance);
             outboxRepository.save(new OutboxEvent(instance.getId().toString(), joinStep, serializeContext(mergedData)));
+            auditLogService.record(instance.getId(), AuditEventType.MULTI_INSTANCE_JOINED, joinStep,
+                    ProcessStatus.RUNNING, ProcessStatus.RUNNING, null);
             log.info("Process {} multi-instance gather complete, transitioning to {}", instance.getId(), joinStep);
         } else {
             repository.saveAndFlush(instance);
+            auditLogService.record(instance.getId(), AuditEventType.MULTI_INSTANCE_BRANCH_COMPLETED, eventType,
+                    ProcessStatus.RUNNING, ProcessStatus.RUNNING, Map.of("remaining", remaining));
             log.debug("Process {} MI branch {} completed, {} remaining",
                     instance.getId(), eventType, remaining);
         }
@@ -488,6 +520,8 @@ public class TransitionService {
                 instance.setContextData(contextJson);
                 repository.saveAndFlush(instance);
                 outboxRepository.save(new OutboxEvent(instance.getId().toString(), compStep, contextJson));
+                auditLogService.record(instance.getId(), AuditEventType.COMPENSATION_STEP, compStep,
+                        null, null, Map.of("compensatingFor", step));
                 log.debug("Process {} dispatching compensation step {} for {}", instance.getId(), compStep, step);
                 return;
             }
@@ -501,6 +535,8 @@ public class TransitionService {
         instance.setStatus(ProcessStatus.FAILED);
         instance.setCompletedAt(LocalDateTime.now());
         repository.saveAndFlush(instance);
+        auditLogService.record(instance.getId(), AuditEventType.PROCESS_FAILED, instance.getCurrentStep(),
+                ProcessStatus.RUNNING, ProcessStatus.FAILED, null);
         log.info("Process {} compensation complete. Process is FAILED.", instance.getId());
 
         // Propagate failure to parent if this is a child process
@@ -517,10 +553,13 @@ public class TransitionService {
      * Completes a process and propagates to the parent if this is a child.
      */
     private void completeProcess(ProcessInstance instance) {
+        ProcessStatus fromStatus = instance.getStatus();
         instance.setCurrentStep(COMPLETED_SENTINEL);
         instance.setStatus(ProcessStatus.COMPLETED);
         instance.setCompletedAt(LocalDateTime.now());
         repository.saveAndFlush(instance);
+        auditLogService.record(instance.getId(), AuditEventType.PROCESS_COMPLETED, COMPLETED_SENTINEL,
+                fromStatus, ProcessStatus.COMPLETED, null);
         log.debug("Process {} completed", instance.getId());
 
         if (instance.getParentProcessId() != null) {
@@ -555,6 +594,9 @@ public class TransitionService {
         // Dispatch child's initial step
         outboxRepository.save(new OutboxEvent(
                 child.getId().toString(), childDef.getInitialStep(), contextJson));
+        auditLogService.record(child.getId(), AuditEventType.CHILD_PROCESS_STARTED, childDef.getInitialStep(),
+                null, ProcessStatus.RUNNING,
+                Map.of("parentId", parent.getId().toString(), "definition", childDefinitionName));
         log.info("Process {} spawned child {} (definition={}), waiting for child",
                 parent.getId(), child.getId(), childDefinitionName);
     }
@@ -595,6 +637,9 @@ public class TransitionService {
             repository.saveAndFlush(parent);
             outboxRepository.save(new OutboxEvent(
                     parentId.toString(), nextStep, serializeContext(parentContext)));
+            auditLogService.record(parentId, AuditEventType.PARENT_RESUMED, nextStep,
+                    ProcessStatus.WAITING_FOR_CHILD, ProcessStatus.RUNNING,
+                    Map.of("childId", child.getId().toString()));
             log.info("Parent {} resumed at step {} after child {} completed",
                     parentId, nextStep, child.getId());
         }
@@ -619,6 +664,10 @@ public class TransitionService {
         Map<String, Object> parentContext = mergeContext(parent.getContextData(), childContext);
         parent.setContextData(serializeContext(parentContext));
         parent.setStatus(ProcessStatus.RUNNING); // temporarily set RUNNING so handleFailure can process it
+
+        auditLogService.record(parentId, AuditEventType.PARENT_FAILED, null,
+                ProcessStatus.WAITING_FOR_CHILD, ProcessStatus.RUNNING,
+                Map.of("childId", child.getId().toString()));
 
         handleFailure(parent, Map.of("childProcessFailed", true,
                 "childProcessId", child.getId().toString()));

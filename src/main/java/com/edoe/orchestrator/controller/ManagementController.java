@@ -138,6 +138,17 @@ public class ManagementController {
         return managementService.signalProcess(id, request.event(), request.data());
     }
 
+    @Operation(summary = "Get process audit trail",
+               description = "Retrieves the ordered audit log for a process instance")
+    @ApiResponses(value = {
+            @ApiResponse(responseCode = "200", description = "Audit trail returned"),
+            @ApiResponse(responseCode = "404", description = "Process instance not found")
+    })
+    @GetMapping("/processes/{id}/audit")
+    public List<AuditLogResponse> getAuditTrail(@PathVariable UUID id) {
+        return managementService.getAuditTrail(id);
+    }
+
     // --- Metrics ---
 
     @Operation(summary = "Get metrics summary", description = "Retrieves high-level metrics for all process instances in the system")

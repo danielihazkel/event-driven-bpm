@@ -24,11 +24,14 @@ class StepTimeoutServiceTest {
     @Mock
     private ProcessInstanceRepository repository;
 
+    @Mock
+    private AuditLogService auditLogService;
+
     private StepTimeoutService stepTimeoutService;
 
     @BeforeEach
     void setUp() {
-        stepTimeoutService = new StepTimeoutService(repository, 30L);
+        stepTimeoutService = new StepTimeoutService(repository, 30L, auditLogService);
     }
 
     private ProcessInstance runningInstance(LocalDateTime stepStartedAt) throws Exception {

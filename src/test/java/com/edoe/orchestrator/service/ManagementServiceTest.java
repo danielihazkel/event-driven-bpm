@@ -44,6 +44,8 @@ class ManagementServiceTest {
     private OutboxEventRepository outboxRepository;
     @Mock
     private TransitionService transitionService;
+    @Mock
+    private AuditLogService auditLogService;
 
     private ManagementService managementService;
     private final ObjectMapper objectMapper = new ObjectMapper();
@@ -53,7 +55,7 @@ class ManagementServiceTest {
     @BeforeEach
     void setUp() {
         managementService = new ManagementService(
-                definitionRepository, instanceRepository, outboxRepository, transitionService, objectMapper);
+                definitionRepository, instanceRepository, outboxRepository, transitionService, objectMapper, auditLogService);
     }
 
     private ProcessDefinition definition(String name) {

@@ -40,6 +40,9 @@ class TransitionServiceTest {
     @Mock
     private ProcessDefinitionRepository definitionRepository;
 
+    @Mock
+    private AuditLogService auditLogService;
+
     private TransitionService transitionService;
     private final ObjectMapper objectMapper = new ObjectMapper();
 
@@ -47,7 +50,7 @@ class TransitionServiceTest {
 
     @BeforeEach
     void setUp() {
-        transitionService = new TransitionService(repository, outboxRepository, definitionRepository, objectMapper);
+        transitionService = new TransitionService(repository, outboxRepository, definitionRepository, objectMapper, auditLogService);
     }
 
     private ProcessDefinition definition(String name) {

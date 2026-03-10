@@ -214,4 +214,30 @@ class ManagementControllerTest {
                                 .andExpect(status().isOk())
                                 .andExpect(jsonPath("$.status").value("RUNNING"));
         }
+
+        @Test
+        void getAuditTrail_returns200() throws Exception {
+                UUID id = UUID.randomUUID();
+                AuditLogResponse entry = new AuditLogResponse(
+                                UUID.randomUUID(), id,
+                                com.edoe.orchestrator.entity.AuditEventType.PROCESS_STARTED,
+                                "STEP_1", null, "RUNNING", null,
+                                java.time.LocalDateTime.now());
+                when(managementService.getAuditTrail(id)).thenReturn(List.of(entry));
+
+                mockMvc.perform(get("/api/processes/{id}/audit", id))
+                                .andExpect(status().isOk())
+                                .andExpect(jsonPath("$[0].eventType").value("PROCESS_STARTED"));
+        }
+
+        @Test
+        void getAuditTrail_returns404WhenProcessMissing() throws Exception {
+                UUID id = UUID.randomUUID();
+                when(managementService.getAuditTrail(id))
+                                .thenThrow(new NoSuchElementException("Process not found: " + id));
+
+                mockMvc.perform(get("/api/processes/{id}/audit", id))
+                                .andExpect(status().isNotFound())
+                                .andExpect(jsonPath("$.error").exists());
+        }
 }

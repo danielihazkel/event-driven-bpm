@@ -31,11 +31,14 @@ class TimerServiceTest {
     @Mock
     private OutboxEventRepository outboxRepository;
 
+    @Mock
+    private AuditLogService auditLogService;
+
     private TimerService timerService;
 
     @BeforeEach
     void setUp() {
-        timerService = new TimerService(instanceRepository, outboxRepository);
+        timerService = new TimerService(instanceRepository, outboxRepository, auditLogService);
     }
 
     private ProcessInstance scheduledInstance(String step, LocalDateTime wakeAt) throws Exception {
