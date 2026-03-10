@@ -14,6 +14,7 @@ import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.core.type.TypeReference;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import lombok.RequiredArgsConstructor;
+import lombok.extern.slf4j.Slf4j;
 import org.springframework.data.domain.Page;
 import org.springframework.data.domain.Pageable;
 import org.springframework.stereotype.Service;
@@ -26,6 +27,7 @@ import java.util.NoSuchElementException;
 import java.util.Set;
 import java.util.UUID;
 
+@Slf4j
 @RequiredArgsConstructor
 @Service
 public class ManagementService {
@@ -200,6 +202,73 @@ public class ManagementService {
         transitionService.handleSignal(id.toString(), event, data);
         ProcessInstance instance = instanceRepository.findById(id)
                 .orElseThrow(() -> new NoSuchElementException("Process not found after signal: " + id));
+        return toInstanceResponse(instance);
+    }
+
+    // --- Replay ---
+
+    @Transactional
+    public ProcessInstanceResponse replayFromStep(UUID processId, String fromStep) {
+        ProcessInstance instance = instanceRepository.findById(processId)
+                .orElseThrow(() -> new NoSuchElementException("Process not found: " + processId));
+
+        if (instance.getStatus() == ProcessStatus.COMPLETED
+                || instance.getStatus() == ProcessStatus.WAITING_FOR_CHILD) {
+            throw new IllegalStateException("Cannot replay process in status: " + instance.getStatus());
+        }
+
+        List<ProcessAuditLog> trail = auditLogService.getAuditTrail(processId);
+        ProcessAuditLog matchedEntry = null;
+        for (int i = trail.size() - 1; i >= 0; i--) {
+            ProcessAuditLog entry = trail.get(i);
+            if ((entry.getEventType() == AuditEventType.PROCESS_STARTED
+                    || entry.getEventType() == AuditEventType.STEP_TRANSITION)
+                    && fromStep.equals(entry.getStepName())) {
+                matchedEntry = entry;
+                break;
+            }
+        }
+        if (matchedEntry == null) {
+            throw new NoSuchElementException(
+                    "Step '" + fromStep + "' not found in audit trail for process " + processId);
+        }
+
+        boolean contextRestored = false;
+        String restoredContext = instance.getContextData();
+        if (matchedEntry.getPayload() != null) {
+            try {
+                Map<String, Object> payloadMap = objectMapper.readValue(
+                        matchedEntry.getPayload(), new TypeReference<>() {});
+                if (payloadMap.containsKey("contextSnapshot")) {
+                    restoredContext = (String) payloadMap.get("contextSnapshot");
+                    contextRestored = true;
+                }
+            } catch (JsonProcessingException e) {
+                log.warn("Could not parse audit payload for step {}: {}", fromStep, e.getMessage());
+            }
+        }
+
+        ProcessStatus fromStatus = instance.getStatus();
+        instance.setCurrentStep(fromStep);
+        instance.setStatus(ProcessStatus.RUNNING);
+        instance.setStepStartedAt(LocalDateTime.now());
+        instance.setCompletedAt(null);
+        instance.setWakeAt(null);
+        instance.setParallelPending(null);
+        instance.setJoinStep(null);
+        instance.setParallelCompleted(null);
+        instance.setMiStep(null);
+        instance.setMiResults(null);
+        instance.setCompensating(false);
+        instance.setContextData(restoredContext);
+
+        instanceRepository.saveAndFlush(instance);
+        outboxRepository.save(new OutboxEvent(processId.toString(), fromStep, restoredContext));
+
+        auditLogService.record(processId, AuditEventType.PROCESS_REPLAYED, fromStep,
+                fromStatus, ProcessStatus.RUNNING,
+                Map.of("fromStep", fromStep, "contextRestored", contextRestored));
+
         return toInstanceResponse(instance);
     }
 

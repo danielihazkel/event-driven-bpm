@@ -77,6 +77,8 @@ POST /start-flow
 | Multi-Instance (Scatter-Gather) | A transition rule can carry `multiInstanceVariable`; the engine reads that context key as a `List`, dispatches one indexed command per element (`STEP__MI__0`, `STEP__MI__1`, …), waits for all to report back, then gathers every result into `context.multiInstanceResults` before advancing to `joinStep` |
 | Process Versioning | `PUT /api/definitions/{name}` inserts a new version row instead of mutating the existing one. Each process instance stores the `definitionVersion` it started with; in-flight instances continue to evaluate transitions from their snapshot version, unaffected by later updates |
 | Output Mapping (JSONPath) | A transition rule can carry `outputMapping` — a map of target context key → JSONPath expression. When set, only the mapped fields from the worker output are persisted to `context_data`; unmapped fields are discarded. SpEL conditions still evaluate against the full worker output, so conditions and mappings are fully independent |
+| Audit Log (Event Sourcing) | Every state transition, command dispatch, and received event writes an immutable row to `process_audit_logs`. Each `STEP_TRANSITION` and `PROCESS_STARTED` entry includes a `contextSnapshot` so the full context at that point can be restored |
+| Time-Travel / Replay | `POST /api/processes/{id}/replay?fromStep={step}` rewinds a stuck process to any historical step validated against the audit trail. The engine restores the context snapshot from that moment, clears all mid-flight state (parallel, timer, saga, multi-instance), and re-queues the step command via the Outbox |
 
 ---
 
@@ -447,6 +449,29 @@ curl -s -X POST http://localhost:8080/start-flow \
 
 ---
 
+## Audit Trail & Replay
+
+Every process records a full audit trail. Use the audit endpoint to inspect it, then replay any historical step to recover stuck processes without starting over:
+
+```bash
+# 1. View the audit trail
+curl -s http://localhost:8080/api/processes/<id>/audit
+
+# 2. Replay from a specific historical step (resets status to RUNNING, restores context snapshot)
+curl -s -X POST "http://localhost:8080/api/processes/<id>/replay?fromStep=VALIDATE_CREDIT"
+# → {status: "RUNNING", currentStep: "VALIDATE_CREDIT", ...}
+```
+
+`replay` works on processes in any non-terminal status (`FAILED`, `STALLED`, `RUNNING`, `SUSPENDED`, `SCHEDULED`, `CANCELLED`). The engine:
+
+1. Walks the audit trail backwards to find the last `PROCESS_STARTED` or `STEP_TRANSITION` entry for the requested step.
+2. Restores the `contextSnapshot` captured at that point (falls back to current context if no snapshot is present).
+3. Clears all mid-flight state: parallel branches, timer wakeup, saga compensation, multi-instance tracking.
+4. Sets `status = RUNNING` and re-queues the step command via the Outbox.
+5. Records a `PROCESS_REPLAYED` audit entry.
+
+---
+
 ## API Reference
 
 ### Process flows
@@ -502,6 +527,8 @@ Possible `status` values: `RUNNING`, `COMPLETED`, `FAILED`, `SUSPENDED`, `STALLE
 | `POST` | `/api/processes/{id}/advance` | Manually advance a stuck instance |
 | `POST` | `/api/processes/{id}/wake` | Force-wake a `SCHEDULED` process, skipping the remaining timer delay |
 | `POST` | `/api/processes/{id}/signal` | Injects a named signal event into a `SUSPENDED` process, resuming it from its current gate step |
+| `GET` | `/api/processes/{id}/audit` | Returns the ordered audit trail (all state transitions, commands, and events) for a process instance |
+| `POST` | `/api/processes/{id}/replay` | Rewinds the process to a historical step (validated against the audit trail) and re-queues its command; query param `fromStep` required |
 
 #### Metrics
 
@@ -537,27 +564,32 @@ src/main/java/com/edoe/orchestrator/
 │   ├── ManagementController.java    # /api/** management endpoints
 │   └── ProcessController.java       # /start-flow and /status/{id}
 ├── dto/
+│   ├── AuditLogResponse.java
 │   ├── MetricsSummaryResponse.java
 │   ├── OrchestratorMessage.java     # Kafka message envelope
 │   ├── ProcessDefinitionRequest.java
 │   ├── ProcessDefinitionResponse.java
 │   ├── ProcessInstanceResponse.java
 │   ├── StartFlowRequest.java
-│   └── TransitionRule.java          # Branch rule: {condition, next}, {parallel, joinStep}, {suspend}, {delayMs, next}, {callActivity, next}, or {outputMapping}
+│   └── TransitionRule.java          # Branch rule: {condition, next}, {parallel, joinStep}, {suspend}, {delayMs, next}, {callActivity, next}, {multiInstanceVariable}, or {outputMapping}
 ├── entity/
+│   ├── AuditEventType.java          # 26-constant enum for audit log event types
 │   ├── OutboxEvent.java             # outbox_events table
+│   ├── ProcessAuditLog.java         # process_audit_logs table (immutable, append-only)
 │   ├── ProcessDefinition.java       # process_definitions table
 │   ├── ProcessInstance.java         # process_instances table
 │   └── ProcessStatus.java           # RUNNING/COMPLETED/FAILED/SUSPENDED/STALLED/CANCELLED/SCHEDULED/WAITING_FOR_CHILD
 ├── listener/
 │   └── WorkerEventListener.java     # Consumes "worker-events" topic
 ├── repository/
+│   ├── AuditLogRepository.java
 │   ├── OutboxEventRepository.java
 │   ├── ProcessDefinitionRepository.java
 │   └── ProcessInstanceRepository.java
 ├── service/
+│   ├── AuditLogService.java          # Records and retrieves immutable audit entries
 │   ├── CommandPublisherService.java  # Kafka producer
-│   ├── ManagementService.java        # CRUD for definitions; process ops; metrics
+│   ├── ManagementService.java        # CRUD for definitions; process ops; metrics; replay
 │   ├── OutboxPublisherService.java   # Scheduled outbox poller
 │   ├── StepTimeoutService.java       # Scheduled stall detector
 │   ├── TimerService.java             # Scheduled timer wakeup — resumes SCHEDULED processes

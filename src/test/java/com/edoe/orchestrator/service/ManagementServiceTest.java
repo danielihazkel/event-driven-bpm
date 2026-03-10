@@ -1,6 +1,9 @@
 package com.edoe.orchestrator.service;
 
 import com.edoe.orchestrator.dto.*;
+import com.edoe.orchestrator.entity.AuditEventType;
+import com.edoe.orchestrator.entity.OutboxEvent;
+import com.edoe.orchestrator.entity.ProcessAuditLog;
 import com.edoe.orchestrator.entity.ProcessDefinition;
 import com.edoe.orchestrator.entity.ProcessInstance;
 import com.edoe.orchestrator.entity.ProcessStatus;
@@ -345,6 +348,71 @@ class ManagementServiceTest {
 
         // Parent + child both saved
         verify(instanceRepository, times(2)).saveAndFlush(any());
+    }
+
+    // --- Replay tests ---
+
+    @Test
+    void replayFromStep_resetsStateAndDispatchesCommand() throws Exception {
+        UUID id = UUID.randomUUID();
+        ProcessInstance inst = instance(id, "FLOW", "STEP_2", ProcessStatus.STALLED);
+        ProcessAuditLog entry = new ProcessAuditLog(id, AuditEventType.STEP_TRANSITION,
+                "STEP_1", "RUNNING", "RUNNING", "{\"fromStep\":\"STEP_0\",\"toStep\":\"STEP_1\"}");
+
+        when(instanceRepository.findById(id)).thenReturn(Optional.of(inst));
+        when(auditLogService.getAuditTrail(id)).thenReturn(List.of(entry));
+        when(instanceRepository.saveAndFlush(any())).thenAnswer(inv -> inv.getArgument(0));
+
+        ProcessInstanceResponse resp = managementService.replayFromStep(id, "STEP_1");
+
+        assertThat(resp.status()).isEqualTo(ProcessStatus.RUNNING);
+        assertThat(resp.currentStep()).isEqualTo("STEP_1");
+        ArgumentCaptor<OutboxEvent> captor = ArgumentCaptor.forClass(OutboxEvent.class);
+        verify(outboxRepository).save(captor.capture());
+        assertThat(captor.getValue().getEventType()).isEqualTo("STEP_1");
+    }
+
+    @Test
+    void replayFromStep_stepNotInAuditTrail_throws() throws Exception {
+        UUID id = UUID.randomUUID();
+        ProcessInstance inst = instance(id, "FLOW", "STEP_2", ProcessStatus.FAILED);
+
+        when(instanceRepository.findById(id)).thenReturn(Optional.of(inst));
+        when(auditLogService.getAuditTrail(id)).thenReturn(List.of());
+
+        assertThatThrownBy(() -> managementService.replayFromStep(id, "MISSING_STEP"))
+                .isInstanceOf(NoSuchElementException.class)
+                .hasMessageContaining("MISSING_STEP");
+    }
+
+    @Test
+    void replayFromStep_restoresContextFromSnapshot() throws Exception {
+        UUID id = UUID.randomUUID();
+        ProcessInstance inst = instance(id, "FLOW", "STEP_2", ProcessStatus.STALLED);
+        String snapshotCtx = "{\"amount\":500}";
+        String payload = "{\"fromStep\":\"PREV\",\"toStep\":\"STEP_1\",\"contextSnapshot\":\"{\\\"amount\\\":500}\"}";
+        ProcessAuditLog entry = new ProcessAuditLog(id, AuditEventType.STEP_TRANSITION,
+                "STEP_1", "RUNNING", "RUNNING", payload);
+
+        when(instanceRepository.findById(id)).thenReturn(Optional.of(inst));
+        when(auditLogService.getAuditTrail(id)).thenReturn(List.of(entry));
+        when(instanceRepository.saveAndFlush(any())).thenAnswer(inv -> inv.getArgument(0));
+
+        managementService.replayFromStep(id, "STEP_1");
+
+        assertThat(inst.getContextData()).isEqualTo(snapshotCtx);
+    }
+
+    @Test
+    void replayFromStep_completedProcess_throwsIllegalState() throws Exception {
+        UUID id = UUID.randomUUID();
+        ProcessInstance inst = instance(id, "FLOW", "STEP_2", ProcessStatus.COMPLETED);
+
+        when(instanceRepository.findById(id)).thenReturn(Optional.of(inst));
+
+        assertThatThrownBy(() -> managementService.replayFromStep(id, "STEP_1"))
+                .isInstanceOf(IllegalStateException.class)
+                .hasMessageContaining("Cannot replay");
     }
 
     @Test

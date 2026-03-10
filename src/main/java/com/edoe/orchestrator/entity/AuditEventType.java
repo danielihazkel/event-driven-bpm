@@ -30,5 +30,8 @@ public enum AuditEventType {
 
     // Event received
     EVENT_RECEIVED,
-    SIGNAL_RECEIVED
+    SIGNAL_RECEIVED,
+
+    // Replay
+    PROCESS_REPLAYED
 }

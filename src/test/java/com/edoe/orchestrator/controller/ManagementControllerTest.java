@@ -231,6 +231,29 @@ class ManagementControllerTest {
         }
 
         @Test
+        void replayProcess_returns200() throws Exception {
+                UUID id = UUID.randomUUID();
+                ProcessInstanceResponse running = new ProcessInstanceResponse(id, "FLOW", 1, "STEP_1",
+                                ProcessStatus.RUNNING, LocalDateTime.now(), LocalDateTime.now(), null, "{}", null);
+                when(managementService.replayFromStep(eq(id), eq("STEP_1"))).thenReturn(running);
+
+                mockMvc.perform(post("/api/processes/{id}/replay", id).param("fromStep", "STEP_1"))
+                                .andExpect(status().isOk())
+                                .andExpect(jsonPath("$.status").value("RUNNING"));
+        }
+
+        @Test
+        void replayProcess_stepNotFound_returns404() throws Exception {
+                UUID id = UUID.randomUUID();
+                when(managementService.replayFromStep(eq(id), eq("MISSING")))
+                                .thenThrow(new NoSuchElementException("Step 'MISSING' not found in audit trail for process " + id));
+
+                mockMvc.perform(post("/api/processes/{id}/replay", id).param("fromStep", "MISSING"))
+                                .andExpect(status().isNotFound())
+                                .andExpect(jsonPath("$.error").exists());
+        }
+
+        @Test
         void getAuditTrail_returns404WhenProcessMissing() throws Exception {
                 UUID id = UUID.randomUUID();
                 when(managementService.getAuditTrail(id))

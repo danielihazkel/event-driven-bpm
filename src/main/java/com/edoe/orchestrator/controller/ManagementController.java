@@ -138,6 +138,19 @@ public class ManagementController {
         return managementService.signalProcess(id, request.event(), request.data());
     }
 
+    @Operation(summary = "Replay process from a historical step")
+    @ApiResponses(value = {
+            @ApiResponse(responseCode = "200", description = "Replay initiated"),
+            @ApiResponse(responseCode = "404", description = "Process or step not found in audit trail"),
+            @ApiResponse(responseCode = "409", description = "Process cannot be replayed in its current status")
+    })
+    @PostMapping("/processes/{id}/replay")
+    public ProcessInstanceResponse replayProcess(
+            @PathVariable UUID id,
+            @RequestParam String fromStep) {
+        return managementService.replayFromStep(id, fromStep);
+    }
+
     @Operation(summary = "Get process audit trail",
                description = "Retrieves the ordered audit log for a process instance")
     @ApiResponses(value = {

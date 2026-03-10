@@ -61,7 +61,8 @@ public class TransitionService {
         repository.saveAndFlush(instance);
         outboxRepository.save(new OutboxEvent(instance.getId().toString(), initialStep, contextJson));
         auditLogService.record(instance.getId(), AuditEventType.PROCESS_STARTED, initialStep,
-                null, ProcessStatus.RUNNING, Map.of("definitionName", definitionName, "version", definition.getVersion()));
+                null, ProcessStatus.RUNNING, Map.of("definitionName", definitionName, "version", definition.getVersion(),
+                        "contextSnapshot", contextJson));
         log.debug("Started process {} v{} id={}", definitionName, definition.getVersion(), instance.getId());
         return instance.getId();
     }
@@ -175,7 +176,9 @@ public class TransitionService {
                 repository.saveAndFlush(instance);
                 outboxRepository.save(new OutboxEvent(processId, nextStep, serializeContext(mergedData)));
                 auditLogService.record(uuid, AuditEventType.STEP_TRANSITION, nextStep,
-                        ProcessStatus.RUNNING, ProcessStatus.RUNNING, Map.of("fromStep", fromStep, "toStep", nextStep));
+                        ProcessStatus.RUNNING, ProcessStatus.RUNNING,
+                        Map.of("fromStep", fromStep, "toStep", nextStep,
+                                "contextSnapshot", serializeContext(mergedData)));
                 log.debug("Process {} transitioned to step {}", processId, nextStep);
             }
         }

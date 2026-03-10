@@ -171,7 +171,7 @@ Conditions use **Spring Expression Language (SpEL)** and are evaluated against t
 
 * [x] **Context Mapping & JSONPath Filtering:** Add an `outputMapping` property. Instead of merging all worker outputs into root context, use JSONPath expressions to precisely place specific fields from the output.
 * [x] **Event Sourcing (Audit Log):** Create a `process_audit_logs` table. Insert an immutable row on every state transition, command dispatch, and received event.
-* [ ] **Time-Travel / Replay Mechanism:** Build an API endpoint `/api/processes/{id}/replay?fromStep={step}`. Reconstruct process state from `process_audit_logs` up to that step and re-queue the command, allowing manual intervention on stuck processes.
+* [x] **Time-Travel / Replay Mechanism:** Build an API endpoint `/api/processes/{id}/replay?fromStep={step}`. Reconstruct process state from `process_audit_logs` up to that step and re-queue the command, allowing manual intervention on stuck processes.
 
 ### Phase 12: Integration & Extensibility
 
