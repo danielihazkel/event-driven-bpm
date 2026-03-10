@@ -165,7 +165,7 @@ Conditions use **Spring Expression Language (SpEL)** and are evaluated against t
 * [x] **Timer / Delay Steps:** Add a `DelayStep` definition. Create a new `SCHEDULED` status. Implement a mechanism to wake up the process after a defined duration or at a specific timestamp.
 * [x] **Sub-Processes (Call Activities):** Extend `TransitionRule` to support a `callActivity: "OTHER_PROCESS_DEFINITION"` field. Start the child definition, keeping the parent in a `WAITING_FOR_CHILD` status until complete.
 * [x] **Multi-Instance (Scatter-Gather):** Add `multiInstanceVariable` evaluation. Dynamically spawn parallel commands based on array size in `context_data` and gather results back into a combined Context array.
-* [ ] **Process Versioning:** Update `ProcessDefinition` to include an integer `version` field. The `ProcessInstance` stores the `definitionVersion` it started with to prevent breaking active instances. Make Management API version-aware.
+* [x] **Process Versioning:** Update `ProcessDefinition` to include an integer `version` field. The `ProcessInstance` stores the `definitionVersion` it started with to prevent breaking active instances. Make Management API version-aware.
 
 ### Phase 11: State Management & Data Handling
 

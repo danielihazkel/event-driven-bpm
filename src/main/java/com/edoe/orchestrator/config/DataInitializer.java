@@ -226,7 +226,7 @@ public class DataInitializer implements CommandLineRunner {
             Map<String, String> compensations) {
         String transitionsJson = serialize(transitions);
         String compensationsJson = serializeCompensations(compensations);
-        Optional<ProcessDefinition> existing = definitionRepository.findByName(name);
+        Optional<ProcessDefinition> existing = definitionRepository.findTopByNameOrderByVersionDesc(name);
         if (existing.isPresent()) {
             ProcessDefinition def = existing.get();
             def.setInitialStep(initialStep);

@@ -12,15 +12,19 @@ import java.time.LocalDateTime;
 @Setter
 @NoArgsConstructor(access = AccessLevel.PROTECTED)
 @Entity
-@Table(name = "process_definitions")
+@Table(name = "process_definitions",
+        uniqueConstraints = @UniqueConstraint(columnNames = {"name", "version"}))
 public class ProcessDefinition {
 
     @Id
     @GeneratedValue(strategy = GenerationType.IDENTITY)
     private Long id;
 
-    @Column(nullable = false, unique = true)
+    @Column(nullable = false)
     private String name;
+
+    @Column(nullable = false)
+    private int version = 1;
 
     @Column(name = "initial_step", nullable = false)
     private String initialStep;
@@ -39,6 +43,7 @@ public class ProcessDefinition {
 
     public ProcessDefinition(String name, String initialStep, String transitionsJson) {
         this.name = name;
+        this.version = 1;
         this.initialStep = initialStep;
         this.transitionsJson = transitionsJson;
         this.createdAt = LocalDateTime.now();
@@ -48,6 +53,17 @@ public class ProcessDefinition {
     public ProcessDefinition(String name, String initialStep, String transitionsJson, String compensationsJson) {
         this(name, initialStep, transitionsJson);
         this.compensationsJson = compensationsJson;
+    }
+
+    /** Creates a specific version of a definition (used when bumping version on update). */
+    public ProcessDefinition(String name, int version, String initialStep, String transitionsJson, String compensationsJson) {
+        this.name = name;
+        this.version = version;
+        this.initialStep = initialStep;
+        this.transitionsJson = transitionsJson;
+        this.compensationsJson = compensationsJson;
+        this.createdAt = LocalDateTime.now();
+        this.updatedAt = LocalDateTime.now();
     }
 
 }

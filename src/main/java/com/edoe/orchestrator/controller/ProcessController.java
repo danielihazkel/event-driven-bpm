@@ -30,7 +30,7 @@ public class ProcessController {
     })
     @PostMapping("/start-flow")
     public ResponseEntity<Map<String, String>> startFlow(@RequestBody StartFlowRequest request) {
-        UUID processId = transitionService.startProcess(request.definitionName(), request.initialData());
+        UUID processId = transitionService.startProcess(request.definitionName(), request.definitionVersion(), request.initialData());
         return ResponseEntity.status(201).body(Map.of("processId", processId.toString()));
     }
 

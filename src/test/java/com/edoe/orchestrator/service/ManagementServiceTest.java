@@ -73,7 +73,7 @@ class ManagementServiceTest {
 
     @Test
     void listDefinitions_returnsAll() {
-        when(definitionRepository.findAll()).thenReturn(List.of(definition("FLOW_A"), definition("FLOW_B")));
+        when(definitionRepository.findLatestVersionOfAll()).thenReturn(List.of(definition("FLOW_A"), definition("FLOW_B")));
         List<ProcessDefinitionResponse> result = managementService.listDefinitions();
         assertThat(result).hasSize(2);
         assertThat(result.get(0).name()).isEqualTo("FLOW_A");
@@ -103,31 +103,45 @@ class ManagementServiceTest {
 
     @Test
     void getDefinition_returnsWhenFound() {
-        when(definitionRepository.findByName("MY_FLOW")).thenReturn(Optional.of(definition("MY_FLOW")));
+        when(definitionRepository.findTopByNameOrderByVersionDesc("MY_FLOW")).thenReturn(Optional.of(definition("MY_FLOW")));
         ProcessDefinitionResponse resp = managementService.getDefinition("MY_FLOW");
         assertThat(resp.name()).isEqualTo("MY_FLOW");
     }
 
     @Test
     void getDefinition_throwsWhenNotFound() {
-        when(definitionRepository.findByName("MISSING")).thenReturn(Optional.empty());
+        when(definitionRepository.findTopByNameOrderByVersionDesc("MISSING")).thenReturn(Optional.empty());
         assertThatThrownBy(() -> managementService.getDefinition("MISSING"))
                 .isInstanceOf(NoSuchElementException.class);
     }
 
     @Test
+    void updateDefinition_createsNewVersionRow() {
+        ProcessDefinition existing = definition("MY_FLOW"); // version=1
+        ProcessDefinitionRequest req = new ProcessDefinitionRequest("MY_FLOW", "STEP_A",
+                java.util.Map.of("STEP_A_FINISHED", List.of(TransitionRule.of(null, "COMPLETED"))), Map.of());
+        when(definitionRepository.findTopByNameOrderByVersionDesc("MY_FLOW")).thenReturn(Optional.of(existing));
+        when(definitionRepository.save(any())).thenAnswer(inv -> inv.getArgument(0));
+
+        ProcessDefinitionResponse resp = managementService.updateDefinition("MY_FLOW", req);
+
+        assertThat(resp.version()).isEqualTo(2);
+        assertThat(resp.initialStep()).isEqualTo("STEP_A");
+    }
+
+    @Test
     void deleteDefinition_deletesWhenNoActiveProcesses() {
-        when(definitionRepository.findByName("FLOW_A")).thenReturn(Optional.of(definition("FLOW_A")));
+        when(definitionRepository.findTopByNameOrderByVersionDesc("FLOW_A")).thenReturn(Optional.of(definition("FLOW_A")));
         when(instanceRepository.existsByDefinitionNameAndStatusIn(eq("FLOW_A"), any())).thenReturn(false);
 
         managementService.deleteDefinition("FLOW_A");
 
-        verify(definitionRepository).delete(any(ProcessDefinition.class));
+        verify(definitionRepository).deleteAllByName("FLOW_A");
     }
 
     @Test
     void deleteDefinition_throwsWhenActiveProcessesExist() {
-        when(definitionRepository.findByName("BUSY_FLOW")).thenReturn(Optional.of(definition("BUSY_FLOW")));
+        when(definitionRepository.findTopByNameOrderByVersionDesc("BUSY_FLOW")).thenReturn(Optional.of(definition("BUSY_FLOW")));
         when(instanceRepository.existsByDefinitionNameAndStatusIn(eq("BUSY_FLOW"), any())).thenReturn(true);
 
         assertThatThrownBy(() -> managementService.deleteDefinition("BUSY_FLOW"))

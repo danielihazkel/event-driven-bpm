@@ -39,14 +39,14 @@ class ManagementControllerTest {
         private ManagementService managementService;
 
         private ProcessDefinitionResponse sampleDefinition(String name) {
-                return new ProcessDefinitionResponse(1L, name, "STEP_1",
+                return new ProcessDefinitionResponse(1L, name, 1, "STEP_1",
                                 Map.of("STEP_1_FINISHED", List.of(TransitionRule.of(null, "COMPLETED"))),
                                 Map.of(),
                                 LocalDateTime.now(), LocalDateTime.now());
         }
 
         private ProcessInstanceResponse sampleInstance(UUID id, ProcessStatus status) {
-                return new ProcessInstanceResponse(id, "FLOW", "STEP_1", status,
+                return new ProcessInstanceResponse(id, "FLOW", 1, "STEP_1", status,
                                 LocalDateTime.now(), LocalDateTime.now(), null, "{}", null);
         }
 
@@ -128,7 +128,7 @@ class ManagementControllerTest {
         @Test
         void cancelProcess_returns200() throws Exception {
                 UUID id = UUID.randomUUID();
-                ProcessInstanceResponse cancelled = new ProcessInstanceResponse(id, "FLOW", "STEP_1",
+                ProcessInstanceResponse cancelled = new ProcessInstanceResponse(id, "FLOW", 1, "STEP_1",
                                 ProcessStatus.CANCELLED, LocalDateTime.now(), LocalDateTime.now(), LocalDateTime.now(),
                                 "{}", null);
                 when(managementService.cancelProcess(id)).thenReturn(cancelled);
@@ -162,7 +162,7 @@ class ManagementControllerTest {
         @Test
         void signalProcess_returns200() throws Exception {
                 UUID id = UUID.randomUUID();
-                ProcessInstanceResponse resumed = new ProcessInstanceResponse(id, "LOAN_APPROVAL", "DISBURSE_FUNDS",
+                ProcessInstanceResponse resumed = new ProcessInstanceResponse(id, "LOAN_APPROVAL", 1, "DISBURSE_FUNDS",
                                 ProcessStatus.RUNNING, LocalDateTime.now(), LocalDateTime.now(), null, "{}", null);
                 when(managementService.signalProcess(eq(id), eq("APPROVAL_GRANTED"), any()))
                                 .thenReturn(resumed);

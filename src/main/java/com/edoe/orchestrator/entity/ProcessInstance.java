@@ -23,6 +23,10 @@ public class ProcessInstance {
     @Column(name = "definition_name", nullable = false)
     private String definitionName;
 
+    /** The version of the process definition this instance was started with. */
+    @Column(name = "definition_version", nullable = false)
+    private int definitionVersion = 1;
+
     @Column(name = "current_step", nullable = false)
     private String currentStep;
 
@@ -98,6 +102,17 @@ public class ProcessInstance {
 
     public ProcessInstance(String definitionName, String currentStep, String contextData, ProcessStatus status) {
         this.definitionName = definitionName;
+        this.definitionVersion = 1;
+        this.currentStep = currentStep;
+        this.contextData = contextData;
+        this.status = status;
+        this.createdAt = LocalDateTime.now();
+        this.stepStartedAt = LocalDateTime.now();
+    }
+
+    public ProcessInstance(String definitionName, int definitionVersion, String currentStep, String contextData, ProcessStatus status) {
+        this.definitionName = definitionName;
+        this.definitionVersion = definitionVersion;
         this.currentStep = currentStep;
         this.contextData = contextData;
         this.status = status;

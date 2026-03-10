@@ -73,7 +73,7 @@ class TransitionServiceTest {
     @Test
     void startProcess_savesInstanceAndCreatesOutboxEvent() {
         UUID id = UUID.randomUUID();
-        when(definitionRepository.findByName("USER_REGISTRATION"))
+        when(definitionRepository.findTopByNameOrderByVersionDesc("USER_REGISTRATION"))
                 .thenReturn(Optional.of(definition("USER_REGISTRATION")));
         when(repository.saveAndFlush(any())).thenAnswer(inv -> {
             ProcessInstance pi = inv.getArgument(0);
@@ -88,7 +88,7 @@ class TransitionServiceTest {
         });
 
         Map<String, Object> data = Map.of("userId", "user-42");
-        UUID result = transitionService.startProcess("USER_REGISTRATION", data);
+        UUID result = transitionService.startProcess("USER_REGISTRATION", null, data);
 
         assertThat(result).isEqualTo(id);
 
@@ -113,7 +113,7 @@ class TransitionServiceTest {
         ProcessInstance inst = instanceWithId(id, "STEP_1", ProcessStatus.RUNNING, "{\"userId\":\"user-42\"}");
         when(repository.findById(id)).thenReturn(Optional.of(inst));
         when(repository.saveAndFlush(any())).thenAnswer(inv -> inv.getArgument(0));
-        when(definitionRepository.findByName("TEST_FLOW")).thenReturn(Optional.of(definition("TEST_FLOW")));
+        when(definitionRepository.findByNameAndVersion("TEST_FLOW", 1)).thenReturn(Optional.of(definition("TEST_FLOW")));
 
         transitionService.handleEvent(id.toString(), "STEP_1_FINISHED", Map.of("result", "ok"));
 
@@ -133,7 +133,7 @@ class TransitionServiceTest {
         ProcessInstance inst = instanceWithId(id, "STEP_2", ProcessStatus.RUNNING, "{\"userId\":\"user-42\"}");
         when(repository.findById(id)).thenReturn(Optional.of(inst));
         when(repository.saveAndFlush(any())).thenAnswer(inv -> inv.getArgument(0));
-        when(definitionRepository.findByName("TEST_FLOW")).thenReturn(Optional.of(definition("TEST_FLOW")));
+        when(definitionRepository.findByNameAndVersion("TEST_FLOW", 1)).thenReturn(Optional.of(definition("TEST_FLOW")));
 
         transitionService.handleEvent(id.toString(), "STEP_2_FINISHED", Map.of("finalResult", "done"));
 
@@ -188,7 +188,7 @@ class TransitionServiceTest {
         ProcessInstance inst = instanceWithId(id, "STEP_1", ProcessStatus.RUNNING, "{\"userId\":\"user-42\"}");
         when(repository.findById(id)).thenReturn(Optional.of(inst));
         when(repository.saveAndFlush(any())).thenAnswer(inv -> inv.getArgument(0));
-        when(definitionRepository.findByName("TEST_FLOW")).thenReturn(Optional.of(definition("TEST_FLOW")));
+        when(definitionRepository.findByNameAndVersion("TEST_FLOW", 1)).thenReturn(Optional.of(definition("TEST_FLOW")));
 
         transitionService.handleEvent(id.toString(), "STEP_1_FINISHED", Map.of("result", "ok"));
 
@@ -205,7 +205,7 @@ class TransitionServiceTest {
         UUID id = UUID.randomUUID();
         ProcessDefinition def = new ProcessDefinition("CUSTOM_FLOW", "INIT_STEP",
                 "{\"INIT_STEP_FINISHED\":[{\"next\":\"COMPLETED\"}]}");
-        when(definitionRepository.findByName("CUSTOM_FLOW")).thenReturn(Optional.of(def));
+        when(definitionRepository.findTopByNameOrderByVersionDesc("CUSTOM_FLOW")).thenReturn(Optional.of(def));
         when(repository.saveAndFlush(any())).thenAnswer(inv -> {
             ProcessInstance pi = inv.getArgument(0);
             try {
@@ -218,7 +218,7 @@ class TransitionServiceTest {
             return pi;
         });
 
-        transitionService.startProcess("CUSTOM_FLOW", Map.of());
+        transitionService.startProcess("CUSTOM_FLOW", null, Map.of());
 
         ArgumentCaptor<ProcessInstance> captor = ArgumentCaptor.forClass(ProcessInstance.class);
         verify(repository).saveAndFlush(captor.capture());
@@ -232,11 +232,37 @@ class TransitionServiceTest {
     // 9. startProcess throws when definition not found
     @Test
     void startProcess_throwsWhenDefinitionNotFound() {
-        when(definitionRepository.findByName("MISSING")).thenReturn(Optional.empty());
+        when(definitionRepository.findTopByNameOrderByVersionDesc("MISSING")).thenReturn(Optional.empty());
 
-        assertThatThrownBy(() -> transitionService.startProcess("MISSING", Map.of()))
+        assertThatThrownBy(() -> transitionService.startProcess("MISSING", null, Map.of()))
                 .isInstanceOf(IllegalArgumentException.class)
                 .hasMessageContaining("MISSING");
+    }
+
+    // 9b. startProcess snapshots the definition version onto the instance
+    @Test
+    void startProcess_snapshotsDefinitionVersion() {
+        UUID id = UUID.randomUUID();
+        ProcessDefinition def = new ProcessDefinition("VERSIONED_FLOW", 3, "STEP_1",
+                TRANSITIONS_JSON, null);
+        when(definitionRepository.findTopByNameOrderByVersionDesc("VERSIONED_FLOW")).thenReturn(Optional.of(def));
+        when(repository.saveAndFlush(any())).thenAnswer(inv -> {
+            ProcessInstance pi = inv.getArgument(0);
+            try {
+                Field f = ProcessInstance.class.getDeclaredField("id");
+                f.setAccessible(true);
+                f.set(pi, id);
+            } catch (Exception e) {
+                throw new RuntimeException(e);
+            }
+            return pi;
+        });
+
+        transitionService.startProcess("VERSIONED_FLOW", null, Map.of());
+
+        ArgumentCaptor<ProcessInstance> captor = ArgumentCaptor.forClass(ProcessInstance.class);
+        verify(repository).saveAndFlush(captor.capture());
+        assertThat(captor.getValue().getDefinitionVersion()).isEqualTo(3);
     }
 
     // 10. handleEvent on last step sets completedAt
@@ -246,7 +272,7 @@ class TransitionServiceTest {
         ProcessInstance inst = instanceWithId(id, "STEP_2", ProcessStatus.RUNNING, "{}");
         when(repository.findById(id)).thenReturn(Optional.of(inst));
         when(repository.saveAndFlush(any())).thenAnswer(inv -> inv.getArgument(0));
-        when(definitionRepository.findByName("TEST_FLOW")).thenReturn(Optional.of(definition("TEST_FLOW")));
+        when(definitionRepository.findByNameAndVersion("TEST_FLOW", 1)).thenReturn(Optional.of(definition("TEST_FLOW")));
 
         transitionService.handleEvent(id.toString(), "STEP_2_FINISHED", Map.of());
 
@@ -268,7 +294,7 @@ class TransitionServiceTest {
         ProcessInstance inst = instanceWithId(id, "STEP_1", ProcessStatus.RUNNING, "{\"approved\":true}");
         when(repository.findById(id)).thenReturn(Optional.of(inst));
         when(repository.saveAndFlush(any())).thenAnswer(inv -> inv.getArgument(0));
-        when(definitionRepository.findByName("TEST_FLOW")).thenReturn(Optional.of(def));
+        when(definitionRepository.findByNameAndVersion("TEST_FLOW", 1)).thenReturn(Optional.of(def));
 
         transitionService.handleEvent(id.toString(), "STEP_1_FINISHED", Map.of());
 
@@ -290,7 +316,7 @@ class TransitionServiceTest {
         ProcessInstance inst = instanceWithId(id, "STEP_1", ProcessStatus.RUNNING, "{\"approved\":false}");
         when(repository.findById(id)).thenReturn(Optional.of(inst));
         when(repository.saveAndFlush(any())).thenAnswer(inv -> inv.getArgument(0));
-        when(definitionRepository.findByName("TEST_FLOW")).thenReturn(Optional.of(def));
+        when(definitionRepository.findByNameAndVersion("TEST_FLOW", 1)).thenReturn(Optional.of(def));
 
         transitionService.handleEvent(id.toString(), "STEP_1_FINISHED", Map.of());
 
@@ -310,7 +336,7 @@ class TransitionServiceTest {
         ProcessInstance inst = instanceWithId(id, "PREPARE", ProcessStatus.RUNNING, "{}");
         when(repository.findById(id)).thenReturn(Optional.of(inst));
         when(repository.saveAndFlush(any())).thenAnswer(inv -> inv.getArgument(0));
-        when(definitionRepository.findByName("TEST_FLOW")).thenReturn(Optional.of(def));
+        when(definitionRepository.findByNameAndVersion("TEST_FLOW", 1)).thenReturn(Optional.of(def));
 
         transitionService.handleEvent(id.toString(), "PREPARE_FINISHED", Map.of());
 
@@ -401,7 +427,7 @@ class TransitionServiceTest {
         ProcessInstance inst = instanceWithId(id, "VALIDATE_CREDIT", ProcessStatus.RUNNING, "{\"creditScore\":600}");
         when(repository.findById(id)).thenReturn(Optional.of(inst));
         when(repository.saveAndFlush(any())).thenAnswer(inv -> inv.getArgument(0));
-        when(definitionRepository.findByName("TEST_FLOW")).thenReturn(Optional.of(def));
+        when(definitionRepository.findByNameAndVersion("TEST_FLOW", 1)).thenReturn(Optional.of(def));
 
         transitionService.handleEvent(id.toString(), "VALIDATE_CREDIT_FINISHED", Map.of());
 
@@ -423,7 +449,7 @@ class TransitionServiceTest {
         ProcessInstance inst = instanceWithId(id, "MANUAL_REVIEW", ProcessStatus.SUSPENDED, "{\"creditScore\":600}");
         when(repository.findById(id)).thenReturn(Optional.of(inst));
         when(repository.saveAndFlush(any())).thenAnswer(inv -> inv.getArgument(0));
-        when(definitionRepository.findByName("TEST_FLOW")).thenReturn(Optional.of(def));
+        when(definitionRepository.findByNameAndVersion("TEST_FLOW", 1)).thenReturn(Optional.of(def));
 
         transitionService.handleSignal(id.toString(), "APPROVAL_GRANTED", Map.of("approved", true));
 
@@ -461,7 +487,7 @@ class TransitionServiceTest {
         ProcessInstance inst = instanceWithId(id, "MANUAL_REVIEW", ProcessStatus.SUSPENDED, "{\"loanAmount\":50000}");
         when(repository.findById(id)).thenReturn(Optional.of(inst));
         when(repository.saveAndFlush(any())).thenAnswer(inv -> inv.getArgument(0));
-        when(definitionRepository.findByName("TEST_FLOW")).thenReturn(Optional.of(def));
+        when(definitionRepository.findByNameAndVersion("TEST_FLOW", 1)).thenReturn(Optional.of(def));
 
         transitionService.handleSignal(id.toString(), "APPROVAL_GRANTED", Map.of("approved", false));
 
@@ -488,7 +514,7 @@ class TransitionServiceTest {
 
         when(repository.findById(id)).thenReturn(Optional.of(inst));
         when(repository.saveAndFlush(any())).thenAnswer(inv -> inv.getArgument(0));
-        when(definitionRepository.findByName("PAYMENT_SAGA")).thenReturn(Optional.of(def));
+        when(definitionRepository.findByNameAndVersion("PAYMENT_SAGA", 1)).thenReturn(Optional.of(def));
 
         transitionService.handleEvent(id.toString(), "CHARGE_PAYMENT_FAILED", Map.of("error", "payment declined"));
 
@@ -523,7 +549,7 @@ class TransitionServiceTest {
 
         when(repository.findById(id)).thenReturn(Optional.of(inst));
         when(repository.saveAndFlush(any())).thenAnswer(inv -> inv.getArgument(0));
-        when(definitionRepository.findByName("PAYMENT_SAGA")).thenReturn(Optional.of(def));
+        when(definitionRepository.findByNameAndVersion("PAYMENT_SAGA", 1)).thenReturn(Optional.of(def));
 
         transitionService.handleEvent(id.toString(), "UNDO_RESERVE_INVENTORY_FINISHED", Map.of());
 
@@ -546,7 +572,7 @@ class TransitionServiceTest {
         ProcessInstance inst = instanceWithId(id, "PREPARE_REQUEST", ProcessStatus.RUNNING, "{}");
         when(repository.findById(id)).thenReturn(Optional.of(inst));
         when(repository.saveAndFlush(any())).thenAnswer(inv -> inv.getArgument(0));
-        when(definitionRepository.findByName("TEST_FLOW")).thenReturn(Optional.of(def));
+        when(definitionRepository.findByNameAndVersion("TEST_FLOW", 1)).thenReturn(Optional.of(def));
 
         transitionService.handleEvent(id.toString(), "PREPARE_REQUEST_FINISHED", Map.of());
 
@@ -571,7 +597,7 @@ class TransitionServiceTest {
 
         when(repository.findById(id)).thenReturn(Optional.of(inst));
         when(repository.saveAndFlush(any())).thenAnswer(inv -> inv.getArgument(0));
-        when(definitionRepository.findByName("PAYMENT_SAGA")).thenReturn(Optional.of(def));
+        when(definitionRepository.findByNameAndVersion("PAYMENT_SAGA", 1)).thenReturn(Optional.of(def));
 
         transitionService.handleEvent(id.toString(), "RESERVE_INVENTORY_FINISHED", Map.of());
 
@@ -608,8 +634,8 @@ class TransitionServiceTest {
             }
             return pi;
         });
-        when(definitionRepository.findByName("TEST_FLOW")).thenReturn(Optional.of(parentDef));
-        when(definitionRepository.findByName("CREDIT_CHECK_SUB")).thenReturn(Optional.of(childDef));
+        when(definitionRepository.findByNameAndVersion("TEST_FLOW", 1)).thenReturn(Optional.of(parentDef));
+        when(definitionRepository.findTopByNameOrderByVersionDesc("CREDIT_CHECK_SUB")).thenReturn(Optional.of(childDef));
 
         transitionService.handleEvent(parentId.toString(), "COLLECT_APPLICATION_FINISHED", Map.of());
 
@@ -652,7 +678,7 @@ class TransitionServiceTest {
         when(repository.findById(childId)).thenReturn(Optional.of(child));
         when(repository.findById(parentId)).thenReturn(Optional.of(parent));
         when(repository.saveAndFlush(any())).thenAnswer(inv -> inv.getArgument(0));
-        when(definitionRepository.findByName("CREDIT_CHECK_SUB")).thenReturn(Optional.of(childDef));
+        when(definitionRepository.findByNameAndVersion("CREDIT_CHECK_SUB", 1)).thenReturn(Optional.of(childDef));
 
         transitionService.handleEvent(childId.toString(), "EVALUATE_SCORE_FINISHED", Map.of());
 
@@ -689,7 +715,7 @@ class TransitionServiceTest {
         when(repository.findById(childId)).thenReturn(Optional.of(child));
         when(repository.findById(parentId)).thenReturn(Optional.of(parent));
         when(repository.saveAndFlush(any())).thenAnswer(inv -> inv.getArgument(0));
-        when(definitionRepository.findByName("CREDIT_CHECK_SUB")).thenReturn(Optional.of(childDef));
+        when(definitionRepository.findByNameAndVersion("CREDIT_CHECK_SUB", 1)).thenReturn(Optional.of(childDef));
 
         transitionService.handleEvent(childId.toString(), "EVALUATE_SCORE_FINISHED",
                 Map.of("creditScore", 750));
@@ -725,8 +751,8 @@ class TransitionServiceTest {
         when(repository.findById(childId)).thenReturn(Optional.of(child));
         when(repository.findById(parentId)).thenReturn(Optional.of(parent));
         when(repository.saveAndFlush(any())).thenAnswer(inv -> inv.getArgument(0));
-        when(definitionRepository.findByName("CREDIT_CHECK_SUB")).thenReturn(Optional.of(childDef));
-        when(definitionRepository.findByName("TEST_FLOW")).thenReturn(Optional.of(parentDef));
+        when(definitionRepository.findByNameAndVersion("CREDIT_CHECK_SUB", 1)).thenReturn(Optional.of(childDef));
+        when(definitionRepository.findByNameAndVersion("TEST_FLOW", 1)).thenReturn(Optional.of(parentDef));
 
         transitionService.handleEvent(childId.toString(), "FETCH_CREDIT_REPORT_FAILED", Map.of("error", "timeout"));
 
@@ -755,7 +781,7 @@ class TransitionServiceTest {
 
         when(repository.findById(id)).thenReturn(Optional.of(inst));
         when(repository.saveAndFlush(any())).thenAnswer(inv -> inv.getArgument(0));
-        when(definitionRepository.findByName("TEST_FLOW")).thenReturn(Optional.of(def));
+        when(definitionRepository.findByNameAndVersion("TEST_FLOW", 1)).thenReturn(Optional.of(def));
 
         transitionService.handleEvent(id.toString(), "COLLECT_APPLICATION_FINISHED", Map.of());
 
@@ -796,7 +822,7 @@ class TransitionServiceTest {
 
         when(repository.findById(id)).thenReturn(Optional.of(inst));
         when(repository.saveAndFlush(any())).thenAnswer(inv -> inv.getArgument(0));
-        when(definitionRepository.findByName("TEST_FLOW")).thenReturn(Optional.of(def));
+        when(definitionRepository.findByNameAndVersion("TEST_FLOW", 1)).thenReturn(Optional.of(def));
 
         transitionService.handleEvent(id.toString(), "RECEIVE_ORDERS_FINISHED", Map.of());
 
@@ -908,7 +934,7 @@ class TransitionServiceTest {
 
         when(repository.findById(id)).thenReturn(Optional.of(inst));
         when(repository.saveAndFlush(any())).thenAnswer(inv -> inv.getArgument(0));
-        when(definitionRepository.findByName("TEST_FLOW")).thenReturn(Optional.of(def));
+        when(definitionRepository.findByNameAndVersion("TEST_FLOW", 1)).thenReturn(Optional.of(def));
 
         transitionService.handleEvent(id.toString(), "RECEIVE_ORDERS_FINISHED", Map.of());
 
@@ -940,7 +966,7 @@ class TransitionServiceTest {
 
         when(repository.findById(id)).thenReturn(Optional.of(inst));
         when(repository.saveAndFlush(any())).thenAnswer(inv -> inv.getArgument(0));
-        when(definitionRepository.findByName("TEST_FLOW")).thenReturn(Optional.of(def));
+        when(definitionRepository.findByNameAndVersion("TEST_FLOW", 1)).thenReturn(Optional.of(def));
 
         // Phase 1: scatter
         transitionService.handleEvent(id.toString(), "RECEIVE_ORDERS_FINISHED", Map.of());
@@ -986,7 +1012,7 @@ class TransitionServiceTest {
         when(repository.findById(childId)).thenReturn(Optional.of(child));
         when(repository.findById(parentId)).thenReturn(Optional.of(parent));
         when(repository.saveAndFlush(any())).thenAnswer(inv -> inv.getArgument(0));
-        when(definitionRepository.findByName("CREDIT_CHECK_SUB")).thenReturn(Optional.of(childDef));
+        when(definitionRepository.findByNameAndVersion("CREDIT_CHECK_SUB", 1)).thenReturn(Optional.of(childDef));
 
         transitionService.handleEvent(childId.toString(), "EVALUATE_SCORE_FINISHED", Map.of());
 

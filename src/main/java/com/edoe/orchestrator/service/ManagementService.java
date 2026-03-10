@@ -37,7 +37,7 @@ public class ManagementService {
     // --- Process Definitions ---
 
     public List<ProcessDefinitionResponse> listDefinitions() {
-        return definitionRepository.findAll().stream()
+        return definitionRepository.findLatestVersionOfAll().stream()
                 .map(this::toDefinitionResponse)
                 .toList();
     }
@@ -56,33 +56,35 @@ public class ManagementService {
     }
 
     public ProcessDefinitionResponse getDefinition(String name) {
-        return definitionRepository.findByName(name)
+        return definitionRepository.findTopByNameOrderByVersionDesc(name)
                 .map(this::toDefinitionResponse)
                 .orElseThrow(() -> new NoSuchElementException("Definition not found: " + name));
     }
 
     @Transactional
     public ProcessDefinitionResponse updateDefinition(String name, ProcessDefinitionRequest request) {
-        ProcessDefinition def = definitionRepository.findByName(name)
+        ProcessDefinition current = definitionRepository.findTopByNameOrderByVersionDesc(name)
                 .orElseThrow(() -> new NoSuchElementException("Definition not found: " + name));
-        def.setName(request.name());
-        def.setInitialStep(request.initialStep());
-        def.setTransitionsJson(serializeTransitions(request.transitions()));
-        def.setCompensationsJson(serializeStringMap(request.compensations()));
-        def.setUpdatedAt(LocalDateTime.now());
-        return toDefinitionResponse(definitionRepository.save(def));
+        int newVersion = current.getVersion() + 1;
+        ProcessDefinition newDef = new ProcessDefinition(
+                name,
+                newVersion,
+                request.initialStep(),
+                serializeTransitions(request.transitions()),
+                serializeStringMap(request.compensations()));
+        return toDefinitionResponse(definitionRepository.save(newDef));
     }
 
     @Transactional
     public void deleteDefinition(String name) {
-        ProcessDefinition def = definitionRepository.findByName(name)
+        definitionRepository.findTopByNameOrderByVersionDesc(name)
                 .orElseThrow(() -> new NoSuchElementException("Definition not found: " + name));
         boolean hasActive = instanceRepository.existsByDefinitionNameAndStatusIn(
                 name, Set.of(ProcessStatus.RUNNING, ProcessStatus.STALLED, ProcessStatus.WAITING_FOR_CHILD));
         if (hasActive) {
             throw new IllegalStateException("Cannot delete definition with active processes: " + name);
         }
-        definitionRepository.delete(def);
+        definitionRepository.deleteAllByName(name);
     }
 
     // --- Process Instances ---
@@ -208,13 +210,13 @@ public class ManagementService {
     private ProcessDefinitionResponse toDefinitionResponse(ProcessDefinition def) {
         Map<String, List<TransitionRule>> transitions = deserializeTransitions(def.getTransitionsJson());
         Map<String, String> compensations = deserializeStringMap(def.getCompensationsJson());
-        return new ProcessDefinitionResponse(def.getId(), def.getName(), def.getInitialStep(),
+        return new ProcessDefinitionResponse(def.getId(), def.getName(), def.getVersion(), def.getInitialStep(),
                 transitions, compensations, def.getCreatedAt(), def.getUpdatedAt());
     }
 
     private ProcessInstanceResponse toInstanceResponse(ProcessInstance inst) {
-        return new ProcessInstanceResponse(inst.getId(), inst.getDefinitionName(), inst.getCurrentStep(),
-                inst.getStatus(), inst.getCreatedAt(), inst.getStepStartedAt(),
+        return new ProcessInstanceResponse(inst.getId(), inst.getDefinitionName(), inst.getDefinitionVersion(),
+                inst.getCurrentStep(), inst.getStatus(), inst.getCreatedAt(), inst.getStepStartedAt(),
                 inst.getCompletedAt(), inst.getContextData(), inst.getParentProcessId());
     }
 

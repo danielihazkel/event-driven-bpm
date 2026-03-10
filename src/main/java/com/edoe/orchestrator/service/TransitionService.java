@@ -44,17 +44,21 @@ public class TransitionService {
     private final ExpressionParser spelParser = new SpelExpressionParser();
 
     @Transactional
-    public UUID startProcess(String definitionName, Map<String, Object> initialData) {
-        ProcessDefinition definition = definitionRepository.findByName(definitionName)
-                .orElseThrow(() -> new IllegalArgumentException("Unknown definition: " + definitionName));
+    public UUID startProcess(String definitionName, Integer requestedVersion, Map<String, Object> initialData) {
+        ProcessDefinition definition = (requestedVersion != null)
+                ? definitionRepository.findByNameAndVersion(definitionName, requestedVersion)
+                        .orElseThrow(() -> new IllegalArgumentException(
+                                "Unknown definition: " + definitionName + " version " + requestedVersion))
+                : definitionRepository.findTopByNameOrderByVersionDesc(definitionName)
+                        .orElseThrow(() -> new IllegalArgumentException("Unknown definition: " + definitionName));
 
         Map<String, Object> data = initialData != null ? initialData : Map.of();
         String contextJson = serializeContext(data);
         String initialStep = definition.getInitialStep();
-        ProcessInstance instance = new ProcessInstance(definitionName, initialStep, contextJson, ProcessStatus.RUNNING);
+        ProcessInstance instance = new ProcessInstance(definitionName, definition.getVersion(), initialStep, contextJson, ProcessStatus.RUNNING);
         repository.saveAndFlush(instance);
         outboxRepository.save(new OutboxEvent(instance.getId().toString(), initialStep, contextJson));
-        log.debug("Started process {} id={}", definitionName, instance.getId());
+        log.debug("Started process {} v{} id={}", definitionName, definition.getVersion(), instance.getId());
         return instance.getId();
     }
 
@@ -123,8 +127,9 @@ public class TransitionService {
         steps.add(instance.getCurrentStep());
         instance.setCompletedSteps(serializeStringList(steps));
 
-        ProcessDefinition definition = definitionRepository.findByName(instance.getDefinitionName())
-                .orElseThrow(() -> new IllegalArgumentException("Unknown definition: " + instance.getDefinitionName()));
+        ProcessDefinition definition = definitionRepository.findByNameAndVersion(instance.getDefinitionName(), instance.getDefinitionVersion())
+                .orElseThrow(() -> new IllegalArgumentException("Unknown definition: " + instance.getDefinitionName()
+                        + " v" + instance.getDefinitionVersion()));
 
         Map<String, List<TransitionRule>> transitions = deserializeTransitions(definition.getTransitionsJson());
         Map<String, Object> mergedData = mergeContext(instance.getContextData(), outputData);
@@ -176,9 +181,9 @@ public class TransitionService {
                     "Cannot signal process " + processId + " in status: " + instance.getStatus());
         }
 
-        ProcessDefinition definition = definitionRepository.findByName(instance.getDefinitionName())
+        ProcessDefinition definition = definitionRepository.findByNameAndVersion(instance.getDefinitionName(), instance.getDefinitionVersion())
                 .orElseThrow(() -> new IllegalArgumentException(
-                        "Unknown definition: " + instance.getDefinitionName()));
+                        "Unknown definition: " + instance.getDefinitionName() + " v" + instance.getDefinitionVersion()));
 
         List<String> steps = deserializeStringList(instance.getCompletedSteps());
         steps.add(instance.getCurrentStep());
@@ -454,8 +459,9 @@ public class TransitionService {
 
     private void executeNextCompensation(ProcessInstance instance, Map<String, Object> contextData) {
         List<String> completed = deserializeStringList(instance.getCompletedSteps());
-        ProcessDefinition definition = definitionRepository.findByName(instance.getDefinitionName())
-                .orElseThrow(() -> new IllegalArgumentException("Unknown definition: " + instance.getDefinitionName()));
+        ProcessDefinition definition = definitionRepository.findByNameAndVersion(instance.getDefinitionName(), instance.getDefinitionVersion())
+                .orElseThrow(() -> new IllegalArgumentException("Unknown definition: " + instance.getDefinitionName()
+                        + " v" + instance.getDefinitionVersion()));
         Map<String, String> compensations = deserializeStringMap(definition.getCompensationsJson());
 
         String contextJson = contextData != null ? serializeContext(contextData) : instance.getContextData();
@@ -516,7 +522,7 @@ public class TransitionService {
      */
     private void startChildProcess(ProcessInstance parent, String childDefinitionName,
             String nextAfterChild, Map<String, Object> context) {
-        ProcessDefinition childDef = definitionRepository.findByName(childDefinitionName)
+        ProcessDefinition childDef = definitionRepository.findTopByNameOrderByVersionDesc(childDefinitionName)
                 .orElseThrow(() -> new IllegalArgumentException(
                         "Unknown child definition: " + childDefinitionName));
 
@@ -526,10 +532,10 @@ public class TransitionService {
         parent.setContextData(serializeContext(context));
         repository.saveAndFlush(parent);
 
-        // Create child instance with parent linkage
+        // Create child instance with parent linkage, snapshotting the child definition version
         String contextJson = serializeContext(context);
         ProcessInstance child = new ProcessInstance(
-                childDefinitionName, childDef.getInitialStep(), contextJson, ProcessStatus.RUNNING);
+                childDefinitionName, childDef.getVersion(), childDef.getInitialStep(), contextJson, ProcessStatus.RUNNING);
         child.setParentProcessId(parent.getId());
         child.setParentNextStep(nextAfterChild);
         repository.saveAndFlush(child);

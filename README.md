@@ -75,6 +75,7 @@ POST /start-flow
 | Timer / Delay Steps | A transition rule can carry `delayMs`; the engine advances the current step but parks the process as `SCHEDULED` until a background timer fires and dispatches the command |
 | Sub-Processes (Call Activities) | A transition rule can carry `callActivity`; the engine spawns a child process from another definition, parks the parent as `WAITING_FOR_CHILD`, and automatically resumes it (with merged context) once the child completes or fails |
 | Multi-Instance (Scatter-Gather) | A transition rule can carry `multiInstanceVariable`; the engine reads that context key as a `List`, dispatches one indexed command per element (`STEP__MI__0`, `STEP__MI__1`, …), waits for all to report back, then gathers every result into `context.multiInstanceResults` before advancing to `joinStep` |
+| Process Versioning | `PUT /api/definitions/{name}` inserts a new version row instead of mutating the existing one. Each process instance stores the `definitionVersion` it started with; in-flight instances continue to evaluate transitions from their snapshot version, unaffected by later updates |
 
 ---
 
@@ -428,12 +429,19 @@ curl -s -X POST http://localhost:8080/start-flow \
 | `POST` | `/start-flow` | Start a new process instance |
 | `GET` | `/status/{id}` | Get the current state of a process instance |
 
-**Start a flow:**
+**Start a flow (uses latest version by default):**
 ```bash
 curl -s -X POST http://localhost:8080/start-flow \
   -H "Content-Type: application/json" \
   -d '{"definitionName": "DEFAULT_FLOW", "initialData": {"userId": 42}}'
 # → {"processId": "550e8400-..."}
+```
+
+**Start a flow pinned to a specific version:**
+```bash
+curl -s -X POST http://localhost:8080/start-flow \
+  -H "Content-Type: application/json" \
+  -d '{"definitionName": "DEFAULT_FLOW", "definitionVersion": 2, "initialData": {"userId": 42}}'
 ```
 
 **Check status:**
@@ -451,11 +459,11 @@ Possible `status` values: `RUNNING`, `COMPLETED`, `FAILED`, `SUSPENDED`, `STALLE
 
 | Method | Path | Description |
 |---|---|---|
-| `GET` | `/api/definitions` | List all process definitions |
-| `POST` | `/api/definitions` | Create a new process definition |
-| `GET` | `/api/definitions/{name}` | Get a definition by name |
-| `PUT` | `/api/definitions/{name}` | Update a definition |
-| `DELETE` | `/api/definitions/{name}` | Delete a definition (fails if active instances exist) |
+| `GET` | `/api/definitions` | List the latest version of all process definitions |
+| `POST` | `/api/definitions` | Create a new process definition (always starts at version 1) |
+| `GET` | `/api/definitions/{name}` | Get the latest version of a definition by name |
+| `PUT` | `/api/definitions/{name}` | Publish a new version of a definition (version N+1 inserted; existing instances keep running on their snapshot version) |
+| `DELETE` | `/api/definitions/{name}` | Delete all versions of a definition (fails if active instances exist) |
 
 #### Process Instances
 
