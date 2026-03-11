@@ -16,6 +16,8 @@ import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
 
 import com.edoe.orchestrator.dto.TransitionRule;
+import com.edoe.orchestrator.spi.HttpNativeStepExecutor;
+import com.edoe.orchestrator.spi.NativeStepResult;
 
 import java.lang.reflect.Field;
 import java.time.LocalDateTime;
@@ -45,7 +47,7 @@ class TransitionServiceTest {
     private AuditLogService auditLogService;
 
     @Mock
-    private HttpStepExecutor httpStepExecutor;
+    private HttpNativeStepExecutor httpNativeStepExecutor;
 
     @Mock
     private WebhookDispatchService webhookDispatchService;
@@ -57,7 +59,7 @@ class TransitionServiceTest {
 
     @BeforeEach
     void setUp() {
-        transitionService = new TransitionService(repository, outboxRepository, definitionRepository, objectMapper, auditLogService, httpStepExecutor, webhookDispatchService);
+        transitionService = new TransitionService(repository, outboxRepository, definitionRepository, objectMapper, auditLogService, List.of(httpNativeStepExecutor), webhookDispatchService);
     }
 
     private ProcessDefinition definition(String name) {
@@ -1173,12 +1175,13 @@ class TransitionServiceTest {
 
         when(repository.findById(id)).thenReturn(Optional.of(inst));
         when(definitionRepository.findByNameAndVersion("TEST_FLOW", 1)).thenReturn(Optional.of(def));
-        when(httpStepExecutor.execute(eq("STEP_1"), any(), any()))
-                .thenReturn(new HttpStepExecutor.HttpStepResult(true, Map.of("todoTitle", "delectus aut autem")));
+        when(httpNativeStepExecutor.canHandle(any())).thenReturn(true);
+        when(httpNativeStepExecutor.execute(eq("STEP_1"), any(), any()))
+                .thenReturn(new NativeStepResult(true, Map.of("todoTitle", "delectus aut autem")));
 
         transitionService.handleEvent(id.toString(), "STEP_1_FINISHED", Map.of());
 
-        verify(httpStepExecutor).execute(eq("STEP_1"), any(), any());
+        verify(httpNativeStepExecutor).execute(eq("STEP_1"), any(), any());
         ArgumentCaptor<OutboxEvent> outboxCaptor = ArgumentCaptor.forClass(OutboxEvent.class);
         verify(outboxRepository).save(outboxCaptor.capture());
         assertThat(outboxCaptor.getValue().getEventType()).isEqualTo("STEP_2");
@@ -1201,12 +1204,13 @@ class TransitionServiceTest {
 
         when(repository.findById(id)).thenReturn(Optional.of(inst));
         when(definitionRepository.findByNameAndVersion("TEST_FLOW", 1)).thenReturn(Optional.of(def));
-        when(httpStepExecutor.execute(eq("STEP_1"), any(), any()))
-                .thenReturn(new HttpStepExecutor.HttpStepResult(false, Map.of("httpError", "404 Not Found")));
+        when(httpNativeStepExecutor.canHandle(any())).thenReturn(true);
+        when(httpNativeStepExecutor.execute(eq("STEP_1"), any(), any()))
+                .thenReturn(new NativeStepResult(false, Map.of("httpError", "404 Not Found")));
 
         transitionService.handleEvent(id.toString(), "STEP_1_FINISHED", Map.of());
 
-        verify(httpStepExecutor).execute(eq("STEP_1"), any(), any());
+        verify(httpNativeStepExecutor).execute(eq("STEP_1"), any(), any());
         assertThat(inst.getStatus()).isEqualTo(ProcessStatus.FAILED);
         verify(outboxRepository, never()).save(any());
     }

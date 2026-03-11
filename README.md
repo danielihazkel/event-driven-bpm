@@ -81,6 +81,7 @@ POST /start-flow
 | Time-Travel / Replay | `POST /api/processes/{id}/replay?fromStep={step}` rewinds a stuck process to any historical step validated against the audit trail. The engine restores the context snapshot from that moment, clears all mid-flight state (parallel, timer, saga, multi-instance), and re-queues the step command via the Outbox |
 | Native HTTP REST Step | A transition rule can carry `httpRequest` (url, method, headers, body — all SpEL-able); the engine executes the HTTP call inline, skipping Kafka entirely. The JSON response is merged into `context_data` and the process advances to `next`. HTTP errors trigger the failure / compensation path. |
 | Webhook Subscriptions | Register HTTP POST listeners via `POST /api/webhooks`. When a process reaches a terminal state (`COMPLETED`, `FAILED`, `CANCELLED`), the engine fires asynchronous payloads to all matching subscriptions. Supports per-definition filtering, HMAC-SHA256 request signing (`X-Webhook-Signature`), 3-attempt retry with backoff, and full audit trail entries (`WEBHOOK_DISPATCHED` / `WEBHOOK_FAILED`). |
+| Pluggable Native Step Executors (SPI) | New step execution backends can be added by implementing `NativeStepExecutor` and annotating the class `@Service`. The engine discovers all implementations via Spring's `List<NativeStepExecutor>` injection and routes each transition rule to the first executor whose `canHandle()` returns `true`. The built-in HTTP step is now `HttpNativeStepExecutor` — a thin adapter over `HttpStepExecutor`. Adding gRPC, database, or script step types requires zero changes to `TransitionService`. |
 
 ---
 
@@ -246,6 +247,34 @@ SpEL is supported in `url`, header values, and `body`. Strings that contain `#` 
 The HTTP response body is parsed as a JSON object and merged into `context_data`. Non-JSON or non-object responses are placed under `context.httpResponse`. A `httpStatusCode` key is always added to the merged output.
 
 `httpRequest` can be combined with `condition` so the HTTP call is only made when the condition matches — subsequent unconditional branches act as the bypass path.
+
+### Pluggable Native Step Executors (SPI)
+
+The engine uses a **Spring plugin pattern** (`NativeStepExecutor` SPI) to dispatch non-Kafka steps. When a transition rule is matched, `TransitionService` streams over all registered `NativeStepExecutor` beans and picks the first whose `canHandle(rule)` returns `true`. If none matches, the step is dispatched via the normal Kafka outbox path.
+
+To add a new native step type, implement the interface and annotate it `@Service`:
+
+```java
+@Service
+@RequiredArgsConstructor
+public class MyDatabaseStepExecutor implements NativeStepExecutor {
+
+    @Override
+    public boolean canHandle(TransitionRule rule) {
+        // return true when this executor owns the rule
+        return rule.myDbConfig() != null;
+    }
+
+    @Override
+    public NativeStepResult execute(String stepName, TransitionRule rule, Map<String, Object> context) {
+        // execute the step — do NOT modify ProcessInstance here
+        // return NativeStepResult(true, outputMap) on success
+        // return NativeStepResult(false, Map.of("error", "...")) on failure
+    }
+}
+```
+
+Spring picks up the new bean automatically; no changes to `TransitionService` or any other engine class are required. The built-in `HttpNativeStepExecutor` follows this exact pattern.
 
 ### Compensations (Saga Rollback)
 
@@ -696,6 +725,10 @@ src/main/java/com/edoe/orchestrator/
 │   ├── TransitionService.java        # State machine: evaluates SpEL branches, advances state
 │   ├── WebhookDispatchService.java   # @Async fire-and-forget webhook dispatcher (retry + HMAC)
 │   └── WebhookService.java           # CRUD for webhook subscriptions
+├── spi/
+│   ├── NativeStepExecutor.java       # SPI interface: canHandle(rule) + execute(stepName, rule, context)
+│   ├── NativeStepResult.java         # Result record: success + output map
+│   └── HttpNativeStepExecutor.java   # Built-in adapter: wraps HttpStepExecutor, handles httpRequest rules
 └── worker/
     ├── WorkerCommandListener.java      # Consumes "orchestrator-commands" topic
     ├── WorkerEventPublisherService.java

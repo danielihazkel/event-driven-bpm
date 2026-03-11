@@ -9,6 +9,8 @@ import com.edoe.orchestrator.entity.ProcessStatus;
 import com.edoe.orchestrator.repository.OutboxEventRepository;
 import com.edoe.orchestrator.repository.ProcessDefinitionRepository;
 import com.edoe.orchestrator.repository.ProcessInstanceRepository;
+import com.edoe.orchestrator.spi.NativeStepExecutor;
+import com.edoe.orchestrator.spi.NativeStepResult;
 import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.core.type.TypeReference;
 import com.fasterxml.jackson.databind.ObjectMapper;
@@ -26,6 +28,7 @@ import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Optional;
 import java.util.UUID;
 
 @Slf4j
@@ -43,7 +46,7 @@ public class TransitionService {
     private final ProcessDefinitionRepository definitionRepository;
     private final ObjectMapper objectMapper;
     private final AuditLogService auditLogService;
-    private final HttpStepExecutor httpStepExecutor;
+    private final List<NativeStepExecutor> nativeExecutors;
     private final WebhookDispatchService webhookDispatchService;
     private final ExpressionParser spelParser = new SpelExpressionParser();
 
@@ -169,70 +172,57 @@ public class TransitionService {
             scheduleProcess(instance, matched.next(), matched.delayMs(), mergedData);
         } else if (matched != null && matched.isCallActivityRule()) {
             startChildProcess(instance, matched.callActivity(), matched.next(), mergedData);
-        } else if (matched != null && matched.hasHttpRequest()) {
-            executeHttpStep(instance, matched, mergedData, processId, uuid);
-        } else {
-            String nextStep = (matched == null) ? COMPLETED_SENTINEL : matched.next();
-            if (COMPLETED_SENTINEL.equals(nextStep)) {
-                completeProcess(instance);
-            } else {
-                String fromStep = instance.getCurrentStep();
-                instance.setCurrentStep(nextStep);
-                instance.setStepStartedAt(LocalDateTime.now());
-                repository.saveAndFlush(instance);
-                outboxRepository.save(new OutboxEvent(processId, nextStep, serializeContext(mergedData)));
-                auditLogService.record(uuid, AuditEventType.STEP_TRANSITION, nextStep,
+        } else if (matched != null) {
+            Optional<NativeStepExecutor> nativeExec = nativeExecutors.stream()
+                    .filter(e -> e.canHandle(matched)).findFirst();
+            if (nativeExec.isPresent()) {
+                String currentStep = instance.getCurrentStep();
+                auditLogService.record(uuid, AuditEventType.HTTP_STEP_DISPATCHED, currentStep,
                         ProcessStatus.RUNNING, ProcessStatus.RUNNING,
-                        Map.of("fromStep", fromStep, "toStep", nextStep,
-                                "contextSnapshot", serializeContext(mergedData)));
-                log.debug("Process {} transitioned to step {}", processId, nextStep);
-            }
-        }
-    }
-
-    // -------------------------------------------------------------------------
-    // Native HTTP Step
-    // -------------------------------------------------------------------------
-
-    /**
-     * Executes an inline HTTP call for a rule that carries {@link com.edoe.orchestrator.dto.HttpRequestConfig}.
-     * Bypasses Kafka entirely — no outbox entry is written for the HTTP call itself.
-     *
-     * <p>On success the HTTP response is merged into context and the process advances
-     * to {@code rule.next()} via the normal outbox/Kafka path.
-     * On any HTTP or network failure {@link #handleFailure} is called, which
-     * triggers the compensation/saga chain if one is configured.</p>
-     */
-    private void executeHttpStep(ProcessInstance instance, TransitionRule rule,
-            Map<String, Object> context, String processId, UUID uuid) {
-        String currentStep = instance.getCurrentStep();
-        auditLogService.record(uuid, AuditEventType.HTTP_STEP_DISPATCHED, currentStep,
-                ProcessStatus.RUNNING, ProcessStatus.RUNNING,
-                Map.of("url", rule.httpRequest().url(), "method", rule.httpRequest().method()));
-
-        HttpStepExecutor.HttpStepResult result = httpStepExecutor.execute(currentStep, rule.httpRequest(), context);
-
-        if (result.success()) {
-            Map<String, Object> updatedContext = mergeContext(instance.getContextData(), result.output());
-            instance.setContextData(serializeContext(updatedContext));
-
-            String nextStep = rule.next();
-            if (COMPLETED_SENTINEL.equals(nextStep)) {
-                completeProcess(instance);
+                        Map.of("executor", nativeExec.get().getClass().getSimpleName()));
+                NativeStepResult result = nativeExec.get().execute(currentStep, matched, mergedData);
+                if (result.success()) {
+                    Map<String, Object> updatedContext = mergeContext(instance.getContextData(), result.output());
+                    instance.setContextData(serializeContext(updatedContext));
+                    String nextStep = matched.next();
+                    if (COMPLETED_SENTINEL.equals(nextStep)) {
+                        completeProcess(instance);
+                    } else {
+                        instance.setCurrentStep(nextStep);
+                        instance.setStepStartedAt(LocalDateTime.now());
+                        repository.saveAndFlush(instance);
+                        outboxRepository.save(new OutboxEvent(processId, nextStep, serializeContext(updatedContext)));
+                        auditLogService.record(uuid, AuditEventType.STEP_TRANSITION, nextStep,
+                                ProcessStatus.RUNNING, ProcessStatus.RUNNING,
+                                Map.of("fromStep", currentStep, "toStep", nextStep,
+                                        "contextSnapshot", serializeContext(updatedContext)));
+                        log.debug("Process {} native step {} succeeded, transitioned to {}", processId, currentStep, nextStep);
+                    }
+                } else {
+                    log.warn("Process {} native step {} failed: {}", processId, currentStep, result.output().get("httpError"));
+                    handleFailure(instance, result.output());
+                }
             } else {
-                instance.setCurrentStep(nextStep);
-                instance.setStepStartedAt(LocalDateTime.now());
-                repository.saveAndFlush(instance);
-                outboxRepository.save(new OutboxEvent(processId, nextStep, serializeContext(updatedContext)));
-                auditLogService.record(uuid, AuditEventType.STEP_TRANSITION, nextStep,
-                        ProcessStatus.RUNNING, ProcessStatus.RUNNING,
-                        Map.of("fromStep", currentStep, "toStep", nextStep,
-                                "contextSnapshot", serializeContext(updatedContext)));
-                log.debug("Process {} HTTP step {} succeeded, transitioned to {}", processId, currentStep, nextStep);
+                // Default Kafka dispatch
+                String nextStep = matched.next();
+                if (COMPLETED_SENTINEL.equals(nextStep)) {
+                    completeProcess(instance);
+                } else {
+                    String fromStep = instance.getCurrentStep();
+                    instance.setCurrentStep(nextStep);
+                    instance.setStepStartedAt(LocalDateTime.now());
+                    repository.saveAndFlush(instance);
+                    outboxRepository.save(new OutboxEvent(processId, nextStep, serializeContext(mergedData)));
+                    auditLogService.record(uuid, AuditEventType.STEP_TRANSITION, nextStep,
+                            ProcessStatus.RUNNING, ProcessStatus.RUNNING,
+                            Map.of("fromStep", fromStep, "toStep", nextStep,
+                                    "contextSnapshot", serializeContext(mergedData)));
+                    log.debug("Process {} transitioned to step {}", processId, nextStep);
+                }
             }
         } else {
-            log.warn("Process {} HTTP step {} failed: {}", processId, currentStep, result.output().get("httpError"));
-            handleFailure(instance, result.output());
+            // matched == null → COMPLETED
+            completeProcess(instance);
         }
     }
 
