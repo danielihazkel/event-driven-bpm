@@ -290,59 +290,173 @@ When `POST /api/tasks/{id}/complete` is called:
 
 This means `resultData` fields (e.g. `approved`, `notes`) become available as `#approved`, `#notes` in any SpEL conditions on the signal transition rules.
 
-## 4. UI/UX Design System
+## 4. UI/UX Design System & Layout Structure
 - **Aesthetics:** Sleek, modern, dashboard-centric design. Support for both Dark Mode and Light Mode with seamless switching. Use of subtle glassmorphism for floating overlays, and vibrant but professional colors (e.g., slate/zinc backgrounds with indigo/violet primary accents to signify active states).
-- **Layout Structure:** 
-  - **Left Sidebar:** Collapsible navigation menu housing links to (Dashboard, Definitions, Instances, Tasks, Webhooks, Settings). The Tasks link shows a live badge count of PENDING human tasks.
-  - **Top App Bar:** Breadcrumbs for navigational context, Global Search, Theme Toggle, and Environment/Connection Health Indicator.
-  - **Main Content Area:** Scrollable container for page content with max-width constraints on wide screens for readability.
 - **Interactions:** Subtle hover effects on interactive elements, smooth data transitions, skeleton loading states while React Query fetches data, and accessible toast notifications for API success/errors (e.g., Sonner).
 
-## 5. Page Specifications & Layouts
+### 4.1. Global Application Layout Wireframe
+The app will use a standard Sidebar + Topbar layout to prioritize horizontal space for data tables and visual graphs.
+```text
+┌─────────────────────────────────────────────────────────────┐
+│ ✦ EDOE Admin     🍞 Dashboard / Process Instances      [🌙] │
+├───────────────┬─────────────────────────────────────────────┤
+│ 📊 Dashboard  │                                             │
+│ 📋 Definitions│                                             │
+│ ⚡ Instances  │              MAIN CONTENT AREA              │
+│ 👤 Tasks  (3) │             (Scrollable block)              │
+│ 🪝 Webhooks   │                                             │
+│ ⚙️ Settings   │                                             │
+│               │                                             │
+└───────────────┴─────────────────────────────────────────────┘
+```
+- **Left Sidebar:** Collapsible navigation menu housing links to the core views. The Tasks link shows a live badge count of `PENDING` human tasks.
+- **Top App Bar:** Breadcrumbs for navigational context, Global Search, Theme Toggle, and Environment/Connection Health Indicator.
+- **Main Content Area:** Scrollable container for page content.
+
+## 5. Detailed Page Specifications & Mockups
 
 ### 5.1. Dashboard (`/`)
 - **Purpose:** At-a-glance view of system health and quick navigational shortcuts.
-- **Visuals & Components:**
+
+#### Wireframe
+```text
+┌─────────────────────────────────────────────────────────────┐
+│ Dashboard                                [Start New Flow 🚀]│
+├─────────────────────────────────────────────────────────────┤
+│ System Health Status                                        │
+│ ┌────────────┐ ┌────────────┐ ┌────────────┐ ┌────────────┐ │
+│ │ Total: 150 │ │ Running: 5 │ │ Failed: 2🔴│ │ Success:85%│ │
+│ └────────────┘ └────────────┘ └────────────┘ └────────────┘ │
+├─────────────────────────────────────────────────────────────┤
+│ Recent Activity                                             │
+│ ┌─────────────────────────────────────────────────────────┐ │
+│ │ ID          | FLOW            | STATUS    | TIME        │ │
+│ │ 550e84...   | LOAN_APPROVAL   | [RUNNING] | 2 mins ago  │ │
+│ │ 123e45...   | DEFAULT_FLOW    | [FAILED]  | 5 mins ago  │ │
+│ └─────────────────────────────────────────────────────────┘ │
+└─────────────────────────────────────────────────────────────┘
+```
+- **Key Components:**
   - **Metric Cards Grid:** Top row displaying total processes, running, completed, failed, stalled, and overall success rate (fetched from `/api/metrics/summary`).
   - **Quick Actions Bar:** "Start New Flow" and "Create Definition" prominent buttons.
   - **Recent Activity Table:** Top 5-10 most recently started or failed instances to alert the user of immediate issues.
+- **Functions:** Cards dynamically colorize (e.g., Failed > 0 turns red). Clicking "Start New Flow" opens a modal.
 
 ### 5.2. Process Definitions (`/definitions`)
 - **Purpose:** Manage, explore, and configure workflow schemas.
-- **Visuals & Components:**
-  - **Data Table:** List of definitions showing Name, Latest Version, Created At, and Actions (Edit, Delete, Start).
-  - **Definition Editor View (`/definitions/:name`):**
-    - **Header:** Definition name badge, Version selector (to view older versions), and Action buttons (Save New Version, Delete).
-    - **Split Pane / Tabs:**
-      - **Visual Mode (React Flow):** Canvas displaying step nodes and edges based on `transitions_json`. Custom nodes for Fork, Join, Suspend, HttpRequest, and Delay steps.
-      - **JSON Mode (Monaco):** Editor to manually view or edit definition transition rules.
 
-### 5.3. Process Instances / Monitoring (`/instances`)
+#### Wireframe
+```text
+┌─────────────────────────────────────────────────────────────┐
+│ Process Definitions                      [+ Create New]     │
+├───────────────┬─────────────────────────────────────────────┤
+│ 🔍 Search...  │ ID | Name              | Version | Actions  │
+│               ├─────────────────────────────────────────────┤
+│ [All]         │ 1  | LOAN_APPROVAL     | v1      | [Edit]   │
+│ [Active]      │ 2  | PAYMENT_SAGA      | v1      | [Edit]   │
+│ [Archived]    │ 3  | DEFAULT_FLOW      | v3      | [Edit]   │
+└───────────────┴─────────────────────────────────────────────┘
+```
+- **Key Components:** Data Table with Name, Latest Version, Created At, and Actions (Edit, Delete, Start).
+- **Functions:** Pressing "Edit" routes into the Definition Editor View.
+
+### 5.3. Definition Editor View (`/definitions/:name`)
+- **Purpose:** Visually inspect and manually edit the transition rules for a specific workflow version.
+
+#### Wireframe
+```text
+┌─────────────────────────────────────────────────────────────┐
+│ 🍞 Definitions / LOAN_APPROVAL                [Save New v2] │
+├───────────────────┬─────────────────────────────────────────┤
+│ JSON MODE         │ VISUAL GRAPH MODE                       │
+│ ┌───────────────┐ │ ┌─────────────────────────────────────┐ │
+│ │"transitions":{│ │ │ ● START --> [VALIDATE_CREDIT] --> ◇ │ │
+│ │ "STEP_1_FI... │ │ │                                     │ │
+│ │               │ │ │                                     │ │
+│ └───────────────┘ │ └─────────────────────────────────────┘ │
+└───────────────────┴─────────────────────────────────────────┘
+```
+- **Key Components:** Header ribbon, Version selector (to view read-only history versions). Split pane:
+  - **JSON Mode (Monaco):** Editor for raw transition limits and payload definitions.
+  - **Visual Mode (React Flow):** Canvas rendering node boxes and edges synced instantly from the JSON.
+- **Functions:** Submitting saves a completely new version (N+1) of the flow.
+
+### 5.4. Process Instances / Monitoring (`/instances`)
 - **Purpose:** Track real-time execution of processes across the system.
-- **Visuals & Components:**
-  - **Command Bar / Filters:** Dropdowns to filter by `definitionName` and `status` (RUNNING, FAILED, STALLED, SUSPENDED, SCHEDULED, WAITING_FOR_CHILD, etc.). Search by ID.
-  - **Data Table:** ID, Definition, Status (colored badges), Current Step, Started At, and Completed At. Includes server-side pagination controls.
 
-### 5.4. Process Detail View (`/instances/:id`)
+#### Wireframe
+```text
+┌─────────────────────────────────────────────────────────────┐
+│ Process Instances                                           │
+├─────────────────────────────────────────────────────────────┤
+│ Filters: [Definition: All ⌄] [Status: RUNNING ⌄] 🔍 Search..│
+├─────────────────────────────────────────────────────────────┤
+│ ID             | Definition      | Step       | Status      │
+│ 550e8400-e2... | LOAN_APPROVAL   | STEP_2     | 🔵 RUNNING   │
+│ 123e4567-e8... | PAYMENT_SAGA    | ROLLBACK   | 🔴 FAILED    │
+│ < Prev | Page 1 of 5 | Next >                               │
+└─────────────────────────────────────────────────────────────┘
+```
+- **Key Components:** Command Bar with filters, and a Server-Side Paginated React Table showing current step, execution times, and status markers.
+
+### 5.5. Process Detail View (`/instances/:id`)
 - **Purpose:** Deep dive into a single process execution, troubleshooting, and manual administrative intervention.
-- **Visuals & Components:**
-  - **Header Ribbon:** Status badge, Process ID, timestamps. Administrative Action buttons: Cancel, Retry, Advance, Force Wake (if SCHEDULED), Signal (if SUSPENDED).
-  - **Context Navigation:** If `parentProcessId` exists, show an "Up to Parent Process" clickable link. If the process is `WAITING_FOR_CHILD`, query and list active sub-processes.
-  - **Split Pane Layout:**
-    - **Left Side (Visual Tracker):** React Flow graph of the definition, with the `current_step` highlighted with a glowing pulse, completed steps marked green, and failed steps marked red. The parser logic must strip suffixes like `__MI__\d+` from the active step name to correctly highlight the base step during scatter-gather flows.
-    - **Right Side (Tabs):**
-      1. **Context/Data:** Read-only generic JSON viewer for `contextData`.
-      2. **Audit Trail:** Vertical timeline (using Tailwind standard timeline UI) decoding events from `/api/processes/{id}/audit`. 
-      3. **Advanced State:** View specialized database fields like `parallelPending`, `joinStep`, and `compensating` states.
-  - **Intervention Modals:**
-    - **Signal Modal:** Form requiring an Event Name and JSON data payload to resume a `SUSPENDED` process.
-    - **Replay/Time-Travel Modal:** Modal that fetches the audit trail, presents a timeline of viable historical steps, and exposes a "Replay from Here" button to call `/api/processes/{id}/replay?fromStep=X`.
 
-### 5.5. Webhooks Management (`/webhooks`)
+#### Wireframe
+```text
+┌─────────────────────────────────────────────────────────────┐
+│ 🍞 Instances / 550e84...               [Cancel] [Advance] ⚙️│
+├──────────────────────────────┬──────────────────────────────┤
+│ LIVE VISUAL TRACKER          │ DETAILS TAB: [Context] [Log] │
+│ ┌──────────────────────────┐ │ ┌──────────────────────────┐ │
+│ │ ● START                  │ │ │ { "creditScore": 750 }   │ │
+│ │   ↓                      │ │ └──────────────────────────┘ │
+│ │ [VALIDATE_CREDIT] (✅)   │ │ ┌──────────────────────────┐ │
+│ │   ↓                      │ │ │ 09:00 - STEP STARTED     │ │
+│ │ [DISBURSE_FUNDS]  (✨)   │ │ │ 09:01 - TRANSITION       │ │
+│ └──────────────────────────┘ │ └──────────────────────────┘ │
+└──────────────────────────────┴──────────────────────────────┘
+```
+- **Key Components:**
+  - **Header Ribbon:** Action buttons (Cancel, Retry, Advance, Force Wake, Signal).
+  - **Left Visual Tracker:** React Flow visualization parsed from the original definition. Active step gets a glowing ring (✨). Errored step pulses red, completed steps checkmark green (✅).
+  - **Right Tabs:** Displays read-only payload variables (`contextData`) and a vertical audit-log timeline.
+- **Functions:** "Signal" button opens a modal requesting an Event string & payload JSON. "Time-Travel / Replay" button allows selecting a dot on the audit trail to revert state.
+
+### 5.6. Human Task Inbox (`/tasks`)
+- **Purpose:** Centralized queue for human workers to complete interactive forms generated by process definitions.
+
+#### Wireframe
+```text
+┌─────────────────────────────────────────────────────────────┐
+│ Human Tasks (Inbox)                                         │
+├───────────────────────┬─────────────────────────────────────┤
+│ 🔍 Filters [PENDING ⌄]│ Task: Manual Loan Review            │
+│                       │ Flow: LOAN_APPROVAL (550e8400...)   │
+│ ✧ Manual Loan Review  │-------------------------------------│
+│   LOAN_APPROVAL       │ Approve?  [ ]                       │
+│                       │ Notes:    [_______________________] │
+│ ✧ Review Submission   │                                     │
+│   HUMAN_TASK_FLOW     │                   [ Complete Task ] │
+└───────────────────────┴─────────────────────────────────────┘
+```
+- **Key Components:** Two-column split interface. Left side offers task queue. Right side dynamically renders HTML inputs (checkboxes, inputs) strictly driven by the `formSchema` JSON attached to the step definition.
+- **Functions:** Upon clicking "Complete Task", payload runs `POST /tasks/{id}/complete` effectively unblocking the paused flow.
+
+### 5.7. Webhooks Management (`/webhooks`)
 - **Purpose:** Manage subscriptions to terminal state events for system integrations.
-- **Visuals & Components:**
-  - **Data Table:** Webhook URL, targeted events, definition filters, and an Active/Inactive toggle switch (`/api/webhooks/{id}/toggle`).
-  - **Slide-out Panel / Modal:** Form to create a new subscription (target URL, multi-select for events, optional secret).
+
+#### Wireframe
+```text
+┌─────────────────────────────────────────────────────────────┐
+│ Webhooks                                     [+ Add Webhook]│
+├─────────────────────────────────────────────────────────────┤
+│ URL                   | Events        | Target Flow | Active│
+│ https://api.ex.com/ho | COMPLETED, FA | [All Flows] | [ON]  │
+│ https://old.sys.com/  | FAILED        | ORDER_FULF  | [OFF] │
+└─────────────────────────────────────────────────────────────┘
+```
+- **Key Components:** Data table with Quick-toggle switch (`/api/webhooks/{id}/toggle`). Slideout offcanvas modal to create new subscriptions defining target URLs and specific `COMPLETED/FAILED` event scopes.
 
 ## 6. Flow Patterns, Task Types & Visualization Guide
 
@@ -701,6 +815,23 @@ This section provides the exact JSON definitions for all 11 seeded flows plus mo
 
 ### 10.1. All 11 Seeded Process Definitions
 
+**Legend for flow graphs below:**
+```
+[STEP]            — Default Task (external worker)
+[🌐 STEP]         — HTTP Task (native HTTP REST step)
+[⏱ STEP]          — Timer / Delay Task
+[👤 STEP]          — Human Task (first-class or legacy suspend)
+[[STEP]]          — Sub-Process (call activity)
+[≡ STEP]           — Multi-Instance (scatter-gather)
+[↩ STEP]           — Compensation step (dashed in real UI)
+◇                 — XOR Gateway (conditional branch)
+⊕ FORK / ⊕ JOIN   — Parallel Fork / Join (AND gateway)
+● START           — Start event
+◉ COMPLETED       — Terminal end event
+---->             — normal edge
+- - ->            — compensation / dashed edge
+```
+
 #### DEFAULT_FLOW — Simple linear two-step sequence
 ```json
 {
@@ -713,6 +844,11 @@ This section provides the exact JSON definitions for all 11 seeded flows plus mo
   },
   "compensations": {}
 }
+```
+
+**Flow Graph:**
+```
+● START ──> [STEP_1] ──> [STEP_2] ──> ◉ COMPLETED
 ```
 
 #### LOAN_APPROVAL — Conditional branching + first-class human task gate + output mapping
@@ -759,6 +895,17 @@ This section provides the exact JSON definitions for all 11 seeded flows plus mo
 ```
 *Note: When credit score ≤ 700 the process suspends at `MANUAL_REVIEW` **and** creates a `HumanTask` record. The task-inbox UI calls `POST /api/tasks/{taskId}/complete` with `{"resultData": {"approved": true}}` — the engine fires the `APPROVAL_GRANTED` signal automatically. The `approved` and `notes` fields from `resultData` are available as `#approved` / `#notes` in the SpEL conditions on `APPROVAL_GRANTED` rules.*
 
+**Flow Graph:**
+```
+                                      ┌──> [AUTO_APPROVE] ──────────────────────────────────────┐
+                                      │   (#creditScore > 700)                                  │
+● START ──> [VALIDATE_CREDIT] ──> ◇ ──┤                                                         ├──> [DISBURSE_FUNDS] ──> ◉ COMPLETED
+                                      │   (default)                                              │
+                                      └──> [👤 MANUAL_REVIEW] ──> ◇ ──> [DISBURSE_FUNDS] ────────┘
+                                            "Manual Loan Review"    │   (#approved == true)
+                                            signal: APPROVAL_GRANTED└──> [SEND_REJECTION] ──> ◉ COMPLETED
+```
+
 #### ORDER_FULFILLMENT — Multi-branch conditional routing
 ```json
 {
@@ -783,6 +930,13 @@ This section provides the exact JSON definitions for all 11 seeded flows plus mo
 }
 ```
 
+**Flow Graph:**
+```
+● START ──> [VALIDATE_ORDER] ──> [RESERVE_INVENTORY] ──> ◇ ──────────────────────────> [PROCESS_PAYMENT] ──> ◇ ──────────────> [SHIP_ORDER] ──> ◉ COMPLETED
+                                                          │ (#inventoryAvailable==true)                      │ (#paymentSuccess==true)
+                                                          └──> [NOTIFY_OUT_OF_STOCK] ──> ◉ COMPLETED          └──> [NOTIFY_PAYMENT_FAILED] ──> ◉ COMPLETED
+```
+
 #### PARALLEL_FLOW — Fork/join (AND gateway)
 ```json
 {
@@ -797,6 +951,13 @@ This section provides the exact JSON definitions for all 11 seeded flows plus mo
   },
   "compensations": {}
 }
+```
+
+**Flow Graph:**
+```
+                                         ┌──> [VALIDATE_CREDIT] ──┐
+● START ──> [PREPARE_APPLICATION] ──> ⊕ FORK                      ├──> ⊕ JOIN ──> [APPROVE_LOAN] ──> ◉ COMPLETED
+                                         └──> [VERIFY_IDENTITY]  ──┘
 ```
 
 #### PAYMENT_SAGA — Saga pattern with compensation/rollback
@@ -817,6 +978,14 @@ This section provides the exact JSON definitions for all 11 seeded flows plus mo
 }
 ```
 
+**Flow Graph:**
+```
+● START ──> [RESERVE_INVENTORY] ──> [CHARGE_PAYMENT] ──> [SHIP_ORDER] ──> ◉ COMPLETED
+                  ↑                        ↑
+                  │ (on failure)           │ (on failure)
+            - - -> [↩ UNDO_RESERVE]   - - -> [↩ REFUND_PAYMENT]
+```
+
 #### DELAY_FLOW — Timer/delay step
 ```json
 {
@@ -831,6 +1000,11 @@ This section provides the exact JSON definitions for all 11 seeded flows plus mo
 }
 ```
 
+**Flow Graph:**
+```
+● START ──> [PREPARE_REQUEST] ──> [⏱ 3 000 ms] ──> [PROCESS_REQUEST] ──> ◉ COMPLETED
+```
+
 #### CREDIT_CHECK_SUB — Child definition used by SUB_PROCESS_FLOW
 ```json
 {
@@ -843,6 +1017,11 @@ This section provides the exact JSON definitions for all 11 seeded flows plus mo
   },
   "compensations": {}
 }
+```
+
+**Flow Graph:**
+```
+● START ──> [FETCH_CREDIT_REPORT] ──> [EVALUATE_SCORE] ──> ◉ COMPLETED
 ```
 
 #### SUB_PROCESS_FLOW — Call activity (sub-process invocation)
@@ -861,6 +1040,13 @@ This section provides the exact JSON definitions for all 11 seeded flows plus mo
 }
 ```
 
+**Flow Graph:**
+```
+● START ──> [COLLECT_APPLICATION] ──> [[CREDIT_CHECK_SUB]] ──> [MAKE_DECISION] ──> ◉ COMPLETED
+                                       (spawns child process,
+                                        waits for completion)
+```
+
 #### SCATTER_GATHER_FLOW — Multi-instance scatter-gather
 ```json
 {
@@ -877,6 +1063,14 @@ This section provides the exact JSON definitions for all 11 seeded flows plus mo
 }
 ```
 *Start with: `{"initialData": {"orderItems": [{"sku": "WIDGET-A", "qty": 2}, {"sku": "WIDGET-B", "qty": 1}]}}`*
+
+**Flow Graph:**
+```
+                                       ┌──> [≡ PROCESS_ORDER (instance 0)] ──┐
+● START ──> [RECEIVE_ORDERS] ──> ⊕ MI  ├──> [≡ PROCESS_ORDER (instance 1)] ──┤ ──> ⊕ JOIN ──> [SHIP_ORDERS] ──> ◉ COMPLETED
+                                       └──> [≡ PROCESS_ORDER (instance N)] ──┘
+                                            (fan-out over orderItems[])
+```
 
 #### HTTP_STEP_FLOW — Native HTTP REST step (no Kafka dispatch)
 ```json
@@ -899,6 +1093,11 @@ This section provides the exact JSON definitions for all 11 seeded flows plus mo
   },
   "compensations": {}
 }
+```
+
+**Flow Graph:**
+```
+● START ──> [STEP_1] ──> [🌐 GET jsonplaceholder.typicode.com/todos/1] ──> [STEP_2] ──> ◉ COMPLETED
 ```
 
 #### HUMAN_TASK_FLOW — First-class human task gate
@@ -931,6 +1130,13 @@ This section provides the exact JSON definitions for all 11 seeded flows plus mo
 }
 ```
 *Start with: `{"definitionName": "HUMAN_TASK_FLOW", "initialData": {"submitter": "alice"}}`. After SUBMIT finishes, a `HumanTask` record is created. Call `POST /api/tasks/{taskId}/complete` with `{"resultData": {"approved": true, "comment": "LGTM"}}` to resume.*
+
+**Flow Graph:**
+```
+● START ──> [SUBMIT] ──> [👤 REVIEW_TASK] ──> [COMPLETE] ──> ◉ COMPLETED
+                         "Review Submission"
+                          signal: REVIEW_APPROVED
+```
 
 ### 10.2. Mock Process Instances (Various States)
 
