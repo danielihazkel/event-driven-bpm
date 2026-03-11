@@ -47,6 +47,9 @@ class TransitionServiceTest {
     @Mock
     private HttpStepExecutor httpStepExecutor;
 
+    @Mock
+    private WebhookDispatchService webhookDispatchService;
+
     private TransitionService transitionService;
     private final ObjectMapper objectMapper = new ObjectMapper();
 
@@ -54,7 +57,7 @@ class TransitionServiceTest {
 
     @BeforeEach
     void setUp() {
-        transitionService = new TransitionService(repository, outboxRepository, definitionRepository, objectMapper, auditLogService, httpStepExecutor);
+        transitionService = new TransitionService(repository, outboxRepository, definitionRepository, objectMapper, auditLogService, httpStepExecutor, webhookDispatchService);
     }
 
     private ProcessDefinition definition(String name) {

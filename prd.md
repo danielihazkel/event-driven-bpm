@@ -176,7 +176,7 @@ Conditions use **Spring Expression Language (SpEL)** and are evaluated against t
 ### Phase 12: Integration & Extensibility
 
 * [x] **Native HTTP REST Step:** Introduce an `HttpTaskWorker` built into the engine with `httpRequest` configuration in the `TransitionRule` (URL, Method, Headers, Body with SpEL). Executes HTTP calls natively instead of using Kafka outbox.
-* [ ] **Webhook Subscriptions:** Create a `webhook_subscriptions` table. Listen for terminal state changes (`COMPLETED`, `FAILED`, `CANCELLED`) and dispatch asynchronous HTTP POST payloads to registered stakeholder URIs.
+* [x] **Webhook Subscriptions:** Create a `webhook_subscriptions` table. Listen for terminal state changes (`COMPLETED`, `FAILED`, `CANCELLED`) and dispatch asynchronous HTTP POST payloads to registered stakeholder URIs.
 * [ ] **Pluggable Architecture (SPI):** Refactor worker dispatch to use standard Java SPI or Spring plugin patterns, enabling developers to drop JARs into the classpath and transparently add new native step types.
 
 ### Phase 13: Enterprise Readiness & Resiliency

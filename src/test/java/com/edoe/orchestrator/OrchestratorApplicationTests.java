@@ -2,6 +2,7 @@ package com.edoe.orchestrator;
 
 import com.edoe.orchestrator.service.OutboxPublisherService;
 import com.edoe.orchestrator.service.StepTimeoutService;
+import com.edoe.orchestrator.service.WebhookDispatchService;
 import org.junit.jupiter.api.Test;
 import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.boot.test.mock.mockito.MockBean;
@@ -33,6 +34,9 @@ public class OrchestratorApplicationTests {
 
     @MockBean
     private StepTimeoutService stepTimeoutService;
+
+    @MockBean
+    private WebhookDispatchService webhookDispatchService;
 
     @Test
     void contextLoads() {

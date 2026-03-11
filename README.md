@@ -80,6 +80,7 @@ POST /start-flow
 | Audit Log (Event Sourcing) | Every state transition, command dispatch, and received event writes an immutable row to `process_audit_logs`. Each `STEP_TRANSITION` and `PROCESS_STARTED` entry includes a `contextSnapshot` so the full context at that point can be restored |
 | Time-Travel / Replay | `POST /api/processes/{id}/replay?fromStep={step}` rewinds a stuck process to any historical step validated against the audit trail. The engine restores the context snapshot from that moment, clears all mid-flight state (parallel, timer, saga, multi-instance), and re-queues the step command via the Outbox |
 | Native HTTP REST Step | A transition rule can carry `httpRequest` (url, method, headers, body — all SpEL-able); the engine executes the HTTP call inline, skipping Kafka entirely. The JSON response is merged into `context_data` and the process advances to `next`. HTTP errors trigger the failure / compensation path. |
+| Webhook Subscriptions | Register HTTP POST listeners via `POST /api/webhooks`. When a process reaches a terminal state (`COMPLETED`, `FAILED`, `CANCELLED`), the engine fires asynchronous payloads to all matching subscriptions. Supports per-definition filtering, HMAC-SHA256 request signing (`X-Webhook-Signature`), 3-attempt retry with backoff, and full audit trail entries (`WEBHOOK_DISPATCHED` / `WEBHOOK_FAILED`). |
 
 ---
 
@@ -579,6 +580,47 @@ Possible `status` values: `RUNNING`, `COMPLETED`, `FAILED`, `SUSPENDED`, `STALLE
 | `GET` | `/api/processes/{id}/audit` | Returns the ordered audit trail (all state transitions, commands, and events) for a process instance |
 | `POST` | `/api/processes/{id}/replay` | Rewinds the process to a historical step (validated against the audit trail) and re-queues its command; query param `fromStep` required |
 
+#### Webhook Subscriptions
+
+| Method | Path | Description |
+|---|---|---|
+| `POST` | `/api/webhooks` | Create a new webhook subscription |
+| `GET` | `/api/webhooks` | List all subscriptions (paginated) |
+| `GET` | `/api/webhooks/{id}` | Get a subscription by ID |
+| `DELETE` | `/api/webhooks/{id}` | Delete a subscription |
+| `PATCH` | `/api/webhooks/{id}/toggle` | Toggle a subscription active/inactive |
+
+**Create a webhook subscription:**
+```bash
+curl -s -X POST http://localhost:8080/api/webhooks \
+  -H "Content-Type: application/json" \
+  -d '{
+    "targetUrl": "https://your-endpoint.example.com/hook",
+    "events": ["COMPLETED", "FAILED"],
+    "processDefinitionName": "LOAN_APPROVAL",
+    "secret": "my-signing-secret"
+  }'
+```
+
+- `targetUrl` — Required. The URL to POST to on terminal state change.
+- `events` — Required. Non-empty subset of `["COMPLETED", "FAILED", "CANCELLED"]`.
+- `processDefinitionName` — Optional. If omitted the subscription matches all definitions.
+- `secret` — Optional. When set, each request includes an `X-Webhook-Signature: sha256=<hmac>` header so the receiver can verify authenticity.
+
+**Payload sent to the target URL:**
+```json
+{
+  "processId": "550e8400-...",
+  "definitionName": "LOAN_APPROVAL",
+  "status": "COMPLETED",
+  "contextData": "{ ... }",
+  "completedAt": "2026-03-11T09:30:00",
+  "timestamp": "2026-03-11T09:30:00.123"
+}
+```
+
+The engine retries up to 3 times (backoffs: 0 ms, 1 000 ms, 3 000 ms). Success and permanent failure are both recorded in the process audit trail as `WEBHOOK_DISPATCHED` / `WEBHOOK_FAILED` events.
+
 #### Metrics
 
 | Method | Path | Description |
@@ -605,6 +647,7 @@ Key settings in `src/main/resources/application.yml`:
 ```
 src/main/java/com/edoe/orchestrator/
 ├── config/
+│   ├── AsyncConfig.java           # @EnableAsync thread pool for webhook dispatch (4/16/200)
 │   ├── DataInitializer.java       # Upserts example flows on every startup
 │   ├── HttpClientConfig.java      # RestTemplate bean (10s connect / 30s read)
 │   ├── KafkaConsumerConfig.java   # DLQ error handler (3 retries → *.DLT)
@@ -612,7 +655,8 @@ src/main/java/com/edoe/orchestrator/
 ├── controller/
 │   ├── GlobalExceptionHandler.java  # Maps exceptions to HTTP 404/409/400
 │   ├── ManagementController.java    # /api/** management endpoints
-│   └── ProcessController.java       # /start-flow and /status/{id}
+│   ├── ProcessController.java       # /start-flow and /status/{id}
+│   └── WebhookController.java       # /api/webhooks CRUD + toggle
 ├── dto/
 │   ├── AuditLogResponse.java
 │   ├── HttpRequestConfig.java       # HTTP step config: url, method, headers, body (all SpEL-able)
@@ -622,21 +666,25 @@ src/main/java/com/edoe/orchestrator/
 │   ├── ProcessDefinitionResponse.java
 │   ├── ProcessInstanceResponse.java
 │   ├── StartFlowRequest.java
-│   └── TransitionRule.java          # Branch rule: {condition, next}, {parallel, joinStep}, {suspend}, {delayMs, next}, {callActivity, next}, {multiInstanceVariable}, {outputMapping}, or {httpRequest, next}
+│   ├── TransitionRule.java          # Branch rule: {condition, next}, {parallel, joinStep}, {suspend}, {delayMs, next}, {callActivity, next}, {multiInstanceVariable}, {outputMapping}, or {httpRequest, next}
+│   ├── WebhookSubscriptionRequest.java
+│   └── WebhookSubscriptionResponse.java
 ├── entity/
-│   ├── AuditEventType.java          # 26-constant enum for audit log event types
+│   ├── AuditEventType.java          # 28-constant enum for audit log event types
 │   ├── OutboxEvent.java             # outbox_events table
 │   ├── ProcessAuditLog.java         # process_audit_logs table (immutable, append-only)
 │   ├── ProcessDefinition.java       # process_definitions table
 │   ├── ProcessInstance.java         # process_instances table
-│   └── ProcessStatus.java           # RUNNING/COMPLETED/FAILED/SUSPENDED/STALLED/CANCELLED/SCHEDULED/WAITING_FOR_CHILD
+│   ├── ProcessStatus.java           # RUNNING/COMPLETED/FAILED/SUSPENDED/STALLED/CANCELLED/SCHEDULED/WAITING_FOR_CHILD
+│   └── WebhookSubscription.java     # webhook_subscriptions table
 ├── listener/
 │   └── WorkerEventListener.java     # Consumes "worker-events" topic
 ├── repository/
 │   ├── AuditLogRepository.java
 │   ├── OutboxEventRepository.java
 │   ├── ProcessDefinitionRepository.java
-│   └── ProcessInstanceRepository.java
+│   ├── ProcessInstanceRepository.java
+│   └── WebhookSubscriptionRepository.java
 ├── service/
 │   ├── AuditLogService.java          # Records and retrieves immutable audit entries
 │   ├── CommandPublisherService.java  # Kafka producer
@@ -645,7 +693,9 @@ src/main/java/com/edoe/orchestrator/
 │   ├── OutboxPublisherService.java   # Scheduled outbox poller
 │   ├── StepTimeoutService.java       # Scheduled stall detector
 │   ├── TimerService.java             # Scheduled timer wakeup — resumes SCHEDULED processes
-│   └── TransitionService.java        # State machine: evaluates SpEL branches, advances state
+│   ├── TransitionService.java        # State machine: evaluates SpEL branches, advances state
+│   ├── WebhookDispatchService.java   # @Async fire-and-forget webhook dispatcher (retry + HMAC)
+│   └── WebhookService.java           # CRUD for webhook subscriptions
 └── worker/
     ├── WorkerCommandListener.java      # Consumes "orchestrator-commands" topic
     ├── WorkerEventPublisherService.java

@@ -50,6 +50,9 @@ class ManagementServiceTest {
     @Mock
     private AuditLogService auditLogService;
 
+    @Mock
+    private WebhookDispatchService webhookDispatchService;
+
     private ManagementService managementService;
     private final ObjectMapper objectMapper = new ObjectMapper();
 
@@ -58,7 +61,7 @@ class ManagementServiceTest {
     @BeforeEach
     void setUp() {
         managementService = new ManagementService(
-                definitionRepository, instanceRepository, outboxRepository, transitionService, objectMapper, auditLogService);
+                definitionRepository, instanceRepository, outboxRepository, transitionService, objectMapper, auditLogService, webhookDispatchService);
     }
 
     private ProcessDefinition definition(String name) {

@@ -44,6 +44,7 @@ public class TransitionService {
     private final ObjectMapper objectMapper;
     private final AuditLogService auditLogService;
     private final HttpStepExecutor httpStepExecutor;
+    private final WebhookDispatchService webhookDispatchService;
     private final ExpressionParser spelParser = new SpelExpressionParser();
 
     @Transactional
@@ -116,6 +117,8 @@ public class TransitionService {
                 instance.setStatus(ProcessStatus.FAILED);
                 instance.setCompletedAt(LocalDateTime.now());
                 repository.saveAndFlush(instance);
+                webhookDispatchService.dispatchTerminalEvent(instance.getId(), instance.getDefinitionName(),
+                        ProcessStatus.FAILED, instance.getContextData(), instance.getCompletedAt());
             } else {
                 log.warn("Ignoring event {} for compensating process {} (step={})", eventType, processId,
                         instance.getCurrentStep());
@@ -589,6 +592,8 @@ public class TransitionService {
         repository.saveAndFlush(instance);
         auditLogService.record(instance.getId(), AuditEventType.PROCESS_FAILED, instance.getCurrentStep(),
                 ProcessStatus.RUNNING, ProcessStatus.FAILED, null);
+        webhookDispatchService.dispatchTerminalEvent(instance.getId(), instance.getDefinitionName(),
+                ProcessStatus.FAILED, instance.getContextData(), instance.getCompletedAt());
         log.info("Process {} compensation complete. Process is FAILED.", instance.getId());
 
         // Propagate failure to parent if this is a child process
@@ -612,6 +617,8 @@ public class TransitionService {
         repository.saveAndFlush(instance);
         auditLogService.record(instance.getId(), AuditEventType.PROCESS_COMPLETED, COMPLETED_SENTINEL,
                 fromStatus, ProcessStatus.COMPLETED, null);
+        webhookDispatchService.dispatchTerminalEvent(instance.getId(), instance.getDefinitionName(),
+                ProcessStatus.COMPLETED, instance.getContextData(), instance.getCompletedAt());
         log.debug("Process {} completed", instance.getId());
 
         if (instance.getParentProcessId() != null) {

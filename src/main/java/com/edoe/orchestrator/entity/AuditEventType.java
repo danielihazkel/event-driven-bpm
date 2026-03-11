@@ -36,5 +36,9 @@ public enum AuditEventType {
     SIGNAL_RECEIVED,
 
     // Replay
-    PROCESS_REPLAYED
+    PROCESS_REPLAYED,
+
+    // Webhook
+    WEBHOOK_DISPATCHED,
+    WEBHOOK_FAILED
 }
