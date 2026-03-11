@@ -79,6 +79,7 @@ POST /start-flow
 | Output Mapping (JSONPath) | A transition rule can carry `outputMapping` — a map of target context key → JSONPath expression. When set, only the mapped fields from the worker output are persisted to `context_data`; unmapped fields are discarded. SpEL conditions still evaluate against the full worker output, so conditions and mappings are fully independent |
 | Audit Log (Event Sourcing) | Every state transition, command dispatch, and received event writes an immutable row to `process_audit_logs`. Each `STEP_TRANSITION` and `PROCESS_STARTED` entry includes a `contextSnapshot` so the full context at that point can be restored |
 | Time-Travel / Replay | `POST /api/processes/{id}/replay?fromStep={step}` rewinds a stuck process to any historical step validated against the audit trail. The engine restores the context snapshot from that moment, clears all mid-flight state (parallel, timer, saga, multi-instance), and re-queues the step command via the Outbox |
+| Native HTTP REST Step | A transition rule can carry `httpRequest` (url, method, headers, body — all SpEL-able); the engine executes the HTTP call inline, skipping Kafka entirely. The JSON response is merged into `context_data` and the process advances to `next`. HTTP errors trigger the failure / compensation path. |
 
 ---
 
@@ -213,6 +214,38 @@ By default, a worker's entire output is shallow-merged into `context_data`. Add 
 - SpEL conditions (e.g. `#creditScore > 700`) are evaluated against the **full** worker output before the mapping is applied, so conditions can reference any worker field regardless of whether it appears in `outputMapping`.
 - When `outputMapping` is omitted, the existing full shallow-merge behaviour is preserved (backward-compatible).
 
+### HTTP step rule (Native HTTP call)
+
+When a rule carries `httpRequest`, the engine executes an HTTP call **inline** — no Kafka command is dispatched. The JSON response is merged into `context_data` and the process advances to `next`. On any HTTP error (4xx / 5xx / network failure) the failure / compensation path is triggered exactly like a `*_FAILED` event.
+
+```json
+{
+  "STEP_1_FINISHED": [
+    {
+      "httpRequest": {
+        "url":    "https://api.example.com/data",
+        "method": "GET",
+        "headers": { "Authorization": "'Bearer ' + #apiToken" }
+      },
+      "next": "STEP_2"
+    }
+  ]
+}
+```
+
+SpEL is supported in `url`, header values, and `body`. Strings that contain `#` or `T(` are evaluated as SpEL expressions against the current process context; all other strings are used verbatim.
+
+| Field | Required | Description |
+|---|---|---|
+| `url` | yes | Target URL. Supports SpEL. |
+| `method` | yes | HTTP method: `GET`, `POST`, `PUT`, `PATCH`, `DELETE`. |
+| `headers` | no | Map of header name → value (values support SpEL). |
+| `body` | no | Request body string. Supports SpEL. Omit for GET requests. |
+
+The HTTP response body is parsed as a JSON object and merged into `context_data`. Non-JSON or non-object responses are placed under `context.httpResponse`. A `httpStatusCode` key is always added to the merged output.
+
+`httpRequest` can be combined with `condition` so the HTTP call is only made when the condition matches — subsequent unconditional branches act as the bypass path.
+
 ### Compensations (Saga Rollback)
 
 Process Definitions can accept a `compensations` map. If a step fails with a `_FAILED` event (e.g., `CHARGE_PAYMENT_FAILED`), the engine automatically enters a compensating state and works backwards through the successfully completed steps, dispatching their corresponding mapped compensation tasks.
@@ -283,7 +316,7 @@ Process Definitions can accept a `compensations` map. If a step fails with a `_F
 
 ## Example Flows (seeded on startup)
 
-Nine example flows are upserted into the database on every app startup. They always reflect the latest engine features. Use them to experiment without creating definitions manually.
+Ten example flows are upserted into the database on every app startup. They always reflect the latest engine features. Use them to experiment without creating definitions manually.
 
 ### DEFAULT_FLOW
 
@@ -447,6 +480,22 @@ curl -s -X POST http://localhost:8080/start-flow \
 # → SHIP_ORDERS is dispatched automatically
 ```
 
+### HTTP_STEP_FLOW
+
+Demonstrates native HTTP step execution. After `STEP_1` finishes (handled by the built-in worker), the engine calls `https://jsonplaceholder.typicode.com/todos/1` (a public test API) **inline** — no Kafka command is dispatched. The JSON response is merged into `context_data`, then `STEP_2` is dispatched normally via the Outbox.
+
+```
+STEP_1 → (HTTP GET jsonplaceholder.typicode.com/todos/1 — inline, no Kafka) → STEP_2 → COMPLETED
+```
+
+```bash
+curl -s -X POST http://localhost:8080/start-flow \
+  -H "Content-Type: application/json" \
+  -d '{"definitionName": "HTTP_STEP_FLOW", "initialData": {}}'
+# → After STEP_1 finishes, context_data will contain the todo item fields (id, title, completed, userId)
+# → from the HTTP response, merged automatically before STEP_2 is dispatched
+```
+
 ---
 
 ## Audit Trail & Replay
@@ -557,6 +606,7 @@ Key settings in `src/main/resources/application.yml`:
 src/main/java/com/edoe/orchestrator/
 ├── config/
 │   ├── DataInitializer.java       # Upserts example flows on every startup
+│   ├── HttpClientConfig.java      # RestTemplate bean (10s connect / 30s read)
 │   ├── KafkaConsumerConfig.java   # DLQ error handler (3 retries → *.DLT)
 │   └── KafkaTopicConfig.java      # Topic declarations
 ├── controller/
@@ -565,13 +615,14 @@ src/main/java/com/edoe/orchestrator/
 │   └── ProcessController.java       # /start-flow and /status/{id}
 ├── dto/
 │   ├── AuditLogResponse.java
+│   ├── HttpRequestConfig.java       # HTTP step config: url, method, headers, body (all SpEL-able)
 │   ├── MetricsSummaryResponse.java
 │   ├── OrchestratorMessage.java     # Kafka message envelope
 │   ├── ProcessDefinitionRequest.java
 │   ├── ProcessDefinitionResponse.java
 │   ├── ProcessInstanceResponse.java
 │   ├── StartFlowRequest.java
-│   └── TransitionRule.java          # Branch rule: {condition, next}, {parallel, joinStep}, {suspend}, {delayMs, next}, {callActivity, next}, {multiInstanceVariable}, or {outputMapping}
+│   └── TransitionRule.java          # Branch rule: {condition, next}, {parallel, joinStep}, {suspend}, {delayMs, next}, {callActivity, next}, {multiInstanceVariable}, {outputMapping}, or {httpRequest, next}
 ├── entity/
 │   ├── AuditEventType.java          # 26-constant enum for audit log event types
 │   ├── OutboxEvent.java             # outbox_events table
@@ -589,6 +640,7 @@ src/main/java/com/edoe/orchestrator/
 ├── service/
 │   ├── AuditLogService.java          # Records and retrieves immutable audit entries
 │   ├── CommandPublisherService.java  # Kafka producer
+│   ├── HttpStepExecutor.java         # Executes inline HTTP calls for httpRequest rules (SpEL, RestTemplate)
 │   ├── ManagementService.java        # CRUD for definitions; process ops; metrics; replay
 │   ├── OutboxPublisherService.java   # Scheduled outbox poller
 │   ├── StepTimeoutService.java       # Scheduled stall detector

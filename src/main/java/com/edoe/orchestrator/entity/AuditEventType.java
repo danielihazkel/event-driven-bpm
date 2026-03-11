@@ -25,6 +25,9 @@ public enum AuditEventType {
     PARENT_RESUMED,
     PARENT_FAILED,
 
+    // HTTP step
+    HTTP_STEP_DISPATCHED,
+
     // Command dispatched
     COMMAND_DISPATCHED,
 

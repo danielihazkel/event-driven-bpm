@@ -1,5 +1,6 @@
 package com.edoe.orchestrator.config;
 
+import com.edoe.orchestrator.dto.HttpRequestConfig;
 import com.edoe.orchestrator.dto.TransitionRule;
 import com.edoe.orchestrator.entity.ProcessDefinition;
 import com.edoe.orchestrator.repository.ProcessDefinitionRepository;
@@ -44,6 +45,7 @@ public class DataInitializer implements CommandLineRunner {
         seedCreditCheckSub();
         seedSubProcessFlow();
         seedScatterGatherFlow();
+        seedHttpStepFlow();
     }
 
     // -------------------------------------------------------------------------
@@ -216,6 +218,34 @@ public class DataInitializer implements CommandLineRunner {
                 "RECEIVE_ORDERS_FINISHED", List.of(
                         TransitionRule.multiInstance("orderItems", "PROCESS_ORDER", "SHIP_ORDERS")),
                 "SHIP_ORDERS_FINISHED", List.of(TransitionRule.of(null, "COMPLETED"))));
+    }
+
+    // -------------------------------------------------------------------------
+    // HTTP_STEP_FLOW — demonstrates native HTTP step execution (Phase 12)
+    // Feature: httpRequest in TransitionRule bypasses Kafka; calls an external
+    // HTTP endpoint inline and merges the JSON response into context_data.
+    //
+    // After STEP_1 finishes (handled by the built-in StepOneWorkerTask), the
+    // engine calls https://jsonplaceholder.typicode.com/todos/1 (a free public
+    // test API) and merges the JSON response into context_data. The process then
+    // advances to STEP_2 via the normal Kafka/Outbox path and completes.
+    //
+    // Start with: {"definitionName":"HTTP_STEP_FLOW","initialData":{}}
+    //
+    // Flow:
+    // STEP_1 → (HTTP GET jsonplaceholder.typicode.com/todos/1) → STEP_2 → COMPLETED
+    // -------------------------------------------------------------------------
+    private void seedHttpStepFlow() {
+        upsert("HTTP_STEP_FLOW", "STEP_1", Map.of(
+                "STEP_1_FINISHED", List.of(
+                        TransitionRule.httpStep(null,
+                                new HttpRequestConfig(
+                                        "https://jsonplaceholder.typicode.com/todos/1",
+                                        "GET",
+                                        Map.of("Accept", "application/json"),
+                                        null),
+                                "STEP_2")),
+                "STEP_2_FINISHED", List.of(TransitionRule.of(null, "COMPLETED"))));
     }
 
     // -------------------------------------------------------------------------

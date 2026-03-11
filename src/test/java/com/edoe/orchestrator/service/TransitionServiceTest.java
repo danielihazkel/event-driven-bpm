@@ -26,6 +26,7 @@ import java.util.UUID;
 
 import static org.assertj.core.api.Assertions.*;
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.*;
 
 @ExtendWith(MockitoExtension.class)
@@ -43,6 +44,9 @@ class TransitionServiceTest {
     @Mock
     private AuditLogService auditLogService;
 
+    @Mock
+    private HttpStepExecutor httpStepExecutor;
+
     private TransitionService transitionService;
     private final ObjectMapper objectMapper = new ObjectMapper();
 
@@ -50,7 +54,7 @@ class TransitionServiceTest {
 
     @BeforeEach
     void setUp() {
-        transitionService = new TransitionService(repository, outboxRepository, definitionRepository, objectMapper, auditLogService);
+        transitionService = new TransitionService(repository, outboxRepository, definitionRepository, objectMapper, auditLogService, httpStepExecutor);
     }
 
     private ProcessDefinition definition(String name) {
@@ -1148,5 +1152,59 @@ class TransitionServiceTest {
         // Only mapped key present — original 'score' key discarded
         assertThat(ctx).containsEntry("creditScore", 800);
         assertThat(ctx).doesNotContainKey("score");
+    }
+
+    // -------------------------------------------------------------------------
+    // HTTP Step tests (Phase 12)
+    // -------------------------------------------------------------------------
+
+    // 32. HTTP step rule: executor called and process advances to next on success
+    @Test
+    void handleEvent_httpStepRule_executesHttpCallAndAdvancesToNextOnSuccess() throws Exception {
+        UUID id = UUID.randomUUID();
+        String httpTransitionsJson =
+                "{\"STEP_1_FINISHED\":[{\"next\":\"STEP_2\",\"httpRequest\":{\"url\":\"https://test.example.com\",\"method\":\"GET\"}}]," +
+                "\"STEP_2_FINISHED\":[{\"next\":\"COMPLETED\"}]}";
+        ProcessDefinition def = new ProcessDefinition("TEST_FLOW", "STEP_1", httpTransitionsJson);
+        ProcessInstance inst = instanceWithId(id, "STEP_1", ProcessStatus.RUNNING, "{}");
+
+        when(repository.findById(id)).thenReturn(Optional.of(inst));
+        when(definitionRepository.findByNameAndVersion("TEST_FLOW", 1)).thenReturn(Optional.of(def));
+        when(httpStepExecutor.execute(eq("STEP_1"), any(), any()))
+                .thenReturn(new HttpStepExecutor.HttpStepResult(true, Map.of("todoTitle", "delectus aut autem")));
+
+        transitionService.handleEvent(id.toString(), "STEP_1_FINISHED", Map.of());
+
+        verify(httpStepExecutor).execute(eq("STEP_1"), any(), any());
+        ArgumentCaptor<OutboxEvent> outboxCaptor = ArgumentCaptor.forClass(OutboxEvent.class);
+        verify(outboxRepository).save(outboxCaptor.capture());
+        assertThat(outboxCaptor.getValue().getEventType()).isEqualTo("STEP_2");
+        assertThat(inst.getCurrentStep()).isEqualTo("STEP_2");
+        // HTTP response merged into context
+        @SuppressWarnings("unchecked")
+        Map<String, Object> ctx = objectMapper.readValue(inst.getContextData(), Map.class);
+        assertThat(ctx).containsEntry("todoTitle", "delectus aut autem");
+    }
+
+    // 33. HTTP step rule: failure path triggered when executor returns success=false
+    @Test
+    void handleEvent_httpStepRule_triggersFailurePathOnHttpError() throws Exception {
+        UUID id = UUID.randomUUID();
+        String httpTransitionsJson =
+                "{\"STEP_1_FINISHED\":[{\"next\":\"STEP_2\",\"httpRequest\":{\"url\":\"https://test.example.com\",\"method\":\"GET\"}}]," +
+                "\"STEP_2_FINISHED\":[{\"next\":\"COMPLETED\"}]}";
+        ProcessDefinition def = new ProcessDefinition("TEST_FLOW", "STEP_1", httpTransitionsJson);
+        ProcessInstance inst = instanceWithId(id, "STEP_1", ProcessStatus.RUNNING, "{}");
+
+        when(repository.findById(id)).thenReturn(Optional.of(inst));
+        when(definitionRepository.findByNameAndVersion("TEST_FLOW", 1)).thenReturn(Optional.of(def));
+        when(httpStepExecutor.execute(eq("STEP_1"), any(), any()))
+                .thenReturn(new HttpStepExecutor.HttpStepResult(false, Map.of("httpError", "404 Not Found")));
+
+        transitionService.handleEvent(id.toString(), "STEP_1_FINISHED", Map.of());
+
+        verify(httpStepExecutor).execute(eq("STEP_1"), any(), any());
+        assertThat(inst.getStatus()).isEqualTo(ProcessStatus.FAILED);
+        verify(outboxRepository, never()).save(any());
     }
 }
