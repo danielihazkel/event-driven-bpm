@@ -2,6 +2,7 @@ package com.edoe.orchestrator.service;
 
 import com.edoe.orchestrator.dto.*;
 import com.edoe.orchestrator.entity.AuditEventType;
+import com.edoe.orchestrator.entity.HumanTaskStatus;
 import com.edoe.orchestrator.entity.OutboxEvent;
 import com.edoe.orchestrator.entity.ProcessAuditLog;
 import com.edoe.orchestrator.entity.ProcessDefinition;
@@ -53,6 +54,9 @@ class ManagementServiceTest {
     @Mock
     private WebhookDispatchService webhookDispatchService;
 
+    @Mock
+    private HumanTaskService humanTaskService;
+
     private ManagementService managementService;
     private final ObjectMapper objectMapper = new ObjectMapper();
 
@@ -61,7 +65,7 @@ class ManagementServiceTest {
     @BeforeEach
     void setUp() {
         managementService = new ManagementService(
-                definitionRepository, instanceRepository, outboxRepository, transitionService, objectMapper, auditLogService, webhookDispatchService);
+                definitionRepository, instanceRepository, outboxRepository, transitionService, objectMapper, auditLogService, webhookDispatchService, humanTaskService);
     }
 
     private ProcessDefinition definition(String name) {
@@ -432,5 +436,20 @@ class ManagementServiceTest {
 
         assertThat(summary.waitingForChild()).isEqualTo(2L);
         assertThat(summary.total()).isEqualTo(8L);
+    }
+
+    // --- Human Task tests ---
+
+    @Test
+    void cancelProcess_shouldCancelPendingHumanTasks() throws Exception {
+        UUID id = UUID.randomUUID();
+        ProcessInstance inst = instance(id, "LOAN_FLOW", "MANUAL_REVIEW", ProcessStatus.SUSPENDED);
+        when(instanceRepository.findById(id)).thenReturn(Optional.of(inst));
+        when(instanceRepository.saveAndFlush(any())).thenAnswer(inv -> inv.getArgument(0));
+        when(instanceRepository.findByParentProcessId(id)).thenReturn(List.of());
+
+        managementService.cancelProcess(id);
+
+        verify(humanTaskService).cancelTasksForProcess(id);
     }
 }

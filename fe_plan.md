@@ -229,10 +229,71 @@ For all these, append to `/api/processes/{id}`.
   - *(Note: `processDefinitionName` and `secret` are optional)*
   - **Response `WebhookSubscriptionResponse`:** (Echoes request data plus `id` and `active` boolean flag).
 
+### 3.6. Human Tasks (`/api/tasks`)
+
+Human tasks are first-class entities created automatically whenever a process matches a `humanTask` transition rule.
+
+**List Tasks**
+- **Endpoint:** `GET /api/tasks?status=PENDING&assignee=john`
+- **Query Parameters (all optional):**
+  - `status` — One of: `PENDING`, `COMPLETED`, `CANCELLED`
+  - `assignee` — Filter by assignee string (as stored, after SpEL resolution)
+- **Response `HumanTaskResponse[]`:**
+  ```json
+  [
+    {
+      "id": "550e8400-...",
+      "processInstanceId": "123e4567-...",
+      "processDefinitionName": "LOAN_APPROVAL",
+      "taskName": "Manual Loan Review",
+      "signalEvent": "APPROVAL_GRANTED",
+      "formSchema": {
+        "fields": [
+          { "name": "approved", "type": "boolean", "label": "Approve?" },
+          { "name": "notes",    "type": "string",  "label": "Notes" }
+        ]
+      },
+      "assignee": null,
+      "status": "PENDING",
+      "createdAt": "2026-03-11T09:10:03",
+      "completedAt": null,
+      "resultData": null
+    }
+  ]
+  ```
+
+**Get Single Task**
+- **Endpoint:** `GET /api/tasks/{id}`
+- **Response:** Single `HumanTaskResponse`. Returns 404 if not found.
+
+**Complete a Task**
+- **Endpoint:** `POST /api/tasks/{id}/complete`
+- **Payload `CompleteTaskRequest`:**
+  ```json
+  { "resultData": { "approved": true, "notes": "Credit history looks good" } }
+  ```
+- **Response:** Updated `HumanTaskResponse` with `status: "COMPLETED"`.
+- **Side-effect:** The engine automatically signals the associated process using `signalEvent` and `resultData` as signal data. The process resumes through its normal transition rules.
+- **Error:** Returns 409 if the task is not `PENDING`.
+
+**Cancel a Task**
+- **Endpoint:** `POST /api/tasks/{id}/cancel`
+- **Response:** Updated `HumanTaskResponse` with `status: "CANCELLED"`.
+- **Note:** Does NOT signal the process. Use this when the task is no longer needed (e.g., the process was cancelled externally). The task-inbox UI should call this only when explicitly discarding a task.
+
+**Important relationship: `signalEvent` ↔ transitions map**
+
+When `POST /api/tasks/{id}/complete` is called:
+1. The task is marked `COMPLETED` with the submitted `resultData`.
+2. The engine calls `POST /api/processes/{processInstanceId}/signal` internally with `event = task.signalEvent` and `data = resultData`.
+3. The process evaluates its `transitions["APPROVAL_GRANTED"]` rules (SpEL conditions see `resultData` fields as context variables).
+
+This means `resultData` fields (e.g. `approved`, `notes`) become available as `#approved`, `#notes` in any SpEL conditions on the signal transition rules.
+
 ## 4. UI/UX Design System
 - **Aesthetics:** Sleek, modern, dashboard-centric design. Support for both Dark Mode and Light Mode with seamless switching. Use of subtle glassmorphism for floating overlays, and vibrant but professional colors (e.g., slate/zinc backgrounds with indigo/violet primary accents to signify active states).
 - **Layout Structure:** 
-  - **Left Sidebar:** Collapsible navigation menu housing links to (Dashboard, Definitions, Instances, Webhooks, Settings).
+  - **Left Sidebar:** Collapsible navigation menu housing links to (Dashboard, Definitions, Instances, Tasks, Webhooks, Settings). The Tasks link shows a live badge count of PENDING human tasks.
   - **Top App Bar:** Breadcrumbs for navigational context, Global Search, Theme Toggle, and Environment/Connection Health Indicator.
   - **Main Content Area:** Scrollable container for page content with max-width constraints on wide screens for readability.
 - **Interactions:** Subtle hover effects on interactive elements, smooth data transitions, skeleton loading states while React Query fetches data, and accessible toast notifications for API success/errors (e.g., Sonner).
@@ -295,8 +356,11 @@ The `reactflow` implementation should include custom node components for the fol
   - *Visualization:* Node with an API/Globe icon or distinct color.
 - **Timer/Delay Task (`delayMs`):** A step that parks the process for a specific duration before advancing.
   - *Visualization:* Node with a Clock/Timer icon.
-- **Human Task (`suspend: true`):** A step that pauses the process waiting for a manual API signal to resume.
-  - *Visualization:* Node indicating a "pause" or user action, styled uniquely (e.g., orange/yellow).
+- **Human Task (`humanTask` field, preferred):** A step that pauses the process and creates a structured `HumanTask` DB record for the task-inbox UI. The frontend discovers it via `GET /api/tasks` and completes it via `POST /api/tasks/{id}/complete`.
+  - *Visualization:* Node with `UserCheck` icon, orange/amber color. Show `humanTask.taskName` as the node label.
+  - *Detection:* Rule has `humanTask !== null`. The suspend step is `rule.next`.
+- **Human Task (legacy `suspend: true`):** Raw suspend gate — no structured task record. Still supported but deprecated in favor of `humanTask`.
+  - *Visualization:* Same orange/amber style as above but without a task name label.
 - **Sub-Process Task (`callActivity`):** Sparks a child process from another definition and waits for its completion.
   - *Visualization:* Node displaying a "layers" or "sub-flow" icon, indicating delegation to another flow.
 
@@ -359,7 +423,12 @@ type AuditEventType =
   | "SIGNAL_RECEIVED"
   | "PROCESS_REPLAYED"
   | "WEBHOOK_DISPATCHED"
-  | "WEBHOOK_FAILED";
+  | "WEBHOOK_FAILED"
+  | "HUMAN_TASK_CREATED"
+  | "HUMAN_TASK_COMPLETED"
+  | "HUMAN_TASK_CANCELLED";
+
+type HumanTaskStatus = "PENDING" | "COMPLETED" | "CANCELLED";
 
 // --- Request DTOs ---
 
@@ -386,6 +455,10 @@ interface WebhookSubscriptionRequest {
   events: ("COMPLETED" | "FAILED" | "CANCELLED")[];
   processDefinitionName?: string | null; // null → matches all definitions
   secret?: string | null; // HMAC-SHA256 signing key
+}
+
+interface CompleteTaskRequest {
+  resultData: Record<string, unknown>; // form values submitted by the human
 }
 
 // --- Response DTOs ---
@@ -446,6 +519,27 @@ interface WebhookSubscriptionResponse {
   createdAt: string;
 }
 
+interface HumanTaskDefinition {
+  taskName: string;              // display name in task list
+  signalEvent: string;           // must match a transitions key; fired on task completion
+  formSchema?: Record<string, unknown> | null; // dynamic form spec, e.g. { fields: [...] }
+  assignee?: string | null;      // literal string or SpEL expression (starts with #)
+}
+
+interface HumanTaskResponse {
+  id: string;                    // UUID
+  processInstanceId: string;     // UUID of the parent process
+  processDefinitionName: string;
+  taskName: string;
+  signalEvent: string;
+  formSchema: Record<string, unknown> | null;
+  assignee: string | null;
+  status: HumanTaskStatus;
+  createdAt: string;             // ISO LocalDateTime
+  completedAt: string | null;
+  resultData: Record<string, unknown> | null; // submitted form values
+}
+
 // --- TransitionRule (the heart of flow definitions) ---
 
 interface HttpRequestConfig {
@@ -466,6 +560,7 @@ interface TransitionRule {
   multiInstanceVariable?: string | null; // context key holding a List for scatter-gather
   outputMapping?: Record<string, string> | null; // target key → JSONPath expression
   httpRequest?: HttpRequestConfig | null; // inline HTTP call config
+  humanTask?: HumanTaskDefinition | null; // first-class human task gate (preferred over suspend: true)
 }
 ```
 
@@ -482,8 +577,11 @@ A `TransitionRule` is polymorphic. Only certain field combinations are valid:
 | **Call activity** | `callActivity`, `next` | `condition` |
 | **Multi-instance** | `multiInstanceVariable`, `next`, `joinStep` | `condition` |
 | **HTTP step** | `httpRequest`, `next` | `condition`, `outputMapping` |
+| **Human task** | `humanTask`, `next` | `condition` |
 
 All fields not listed for a rule type will be `null`/absent. The `@JsonInclude(NON_NULL)` annotation means null fields are omitted from the JSON payload.
+
+**`humanTask` vs `suspend: true`:** Both suspend the process. `humanTask` is the preferred, first-class mechanism — it additionally creates a `HumanTask` DB record that the task-inbox UI can discover and complete. `suspend: true` is the legacy raw-suspend mechanism that requires manual `POST /api/processes/{id}/signal` calls with no structured task data.
 
 ### 7.3. Spring `Page<T>` Response Shape
 
@@ -588,7 +686,7 @@ During scatter-gather execution, the engine creates indexed step names: `PROCESS
 
 | Action | Valid Statuses | Notes |
 |---|---|---|
-| **Cancel** | `RUNNING`, `STALLED`, `SUSPENDED`, `SCHEDULED`, `WAITING_FOR_CHILD` | Cascades cancel to active child processes |
+| **Cancel** | `RUNNING`, `STALLED`, `SUSPENDED`, `SCHEDULED`, `WAITING_FOR_CHILD` | Cascades cancel to active child processes **and** auto-cancels all PENDING human tasks for this process |
 | **Retry** | `FAILED`, `STALLED` | Resets to initial step |
 | **Advance** | `RUNNING`, `STALLED` | Manually forces the next transition |
 | **Wake** | `SCHEDULED` only | Bypasses remaining timer delay |
@@ -599,9 +697,9 @@ During scatter-gather execution, the engine creates indexed step names: `PROCESS
 
 ## 10. Complete Mock Data Reference
 
-This section provides the exact JSON definitions for all 10 seeded flows plus mock data for process instances, audit trails, and webhooks. Use these to populate the MSW/mock layer.
+This section provides the exact JSON definitions for all 11 seeded flows plus mock data for process instances, audit trails, and webhooks. Use these to populate the MSW/mock layer.
 
-### 10.1. All 10 Seeded Process Definitions
+### 10.1. All 11 Seeded Process Definitions
 
 #### DEFAULT_FLOW — Simple linear two-step sequence
 ```json
@@ -617,7 +715,7 @@ This section provides the exact JSON definitions for all 10 seeded flows plus mo
 }
 ```
 
-#### LOAN_APPROVAL — Conditional branching + human-in-the-loop suspend + output mapping
+#### LOAN_APPROVAL — Conditional branching + first-class human task gate + output mapping
 ```json
 {
   "name": "LOAN_APPROVAL",
@@ -633,7 +731,20 @@ This section provides the exact JSON definitions for all 10 seeded flows plus mo
           "creditBureau": "$.meta.bureau"
         }
       },
-      { "next": "MANUAL_REVIEW", "suspend": true }
+      {
+        "next": "MANUAL_REVIEW",
+        "humanTask": {
+          "taskName": "Manual Loan Review",
+          "signalEvent": "APPROVAL_GRANTED",
+          "formSchema": {
+            "fields": [
+              { "name": "approved", "type": "boolean", "label": "Approve?" },
+              { "name": "notes",    "type": "string",  "label": "Notes" }
+            ]
+          },
+          "assignee": null
+        }
+      }
     ],
     "AUTO_APPROVE_FINISHED": [{ "next": "DISBURSE_FUNDS" }],
     "APPROVAL_GRANTED": [
@@ -646,7 +757,7 @@ This section provides the exact JSON definitions for all 10 seeded flows plus mo
   "compensations": {}
 }
 ```
-*Note: The signal event key is `APPROVAL_GRANTED` (not `MANUAL_REVIEW_FINISHED`). When suspended at `MANUAL_REVIEW`, use `POST /signal` with `{"event": "APPROVAL_GRANTED", "data": {"approved": true}}`.*
+*Note: When credit score ≤ 700 the process suspends at `MANUAL_REVIEW` **and** creates a `HumanTask` record. The task-inbox UI calls `POST /api/tasks/{taskId}/complete` with `{"resultData": {"approved": true}}` — the engine fires the `APPROVAL_GRANTED` signal automatically. The `approved` and `notes` fields from `resultData` are available as `#approved` / `#notes` in the SpEL conditions on `APPROVAL_GRANTED` rules.*
 
 #### ORDER_FULFILLMENT — Multi-branch conditional routing
 ```json
@@ -789,6 +900,37 @@ This section provides the exact JSON definitions for all 10 seeded flows plus mo
   "compensations": {}
 }
 ```
+
+#### HUMAN_TASK_FLOW — First-class human task gate
+```json
+{
+  "name": "HUMAN_TASK_FLOW",
+  "version": 1,
+  "initialStep": "SUBMIT",
+  "transitions": {
+    "SUBMIT_FINISHED": [
+      {
+        "next": "REVIEW_TASK",
+        "humanTask": {
+          "taskName": "Review Submission",
+          "signalEvent": "REVIEW_APPROVED",
+          "formSchema": {
+            "fields": [
+              { "name": "approved", "type": "boolean", "label": "Approve?" },
+              { "name": "comment",  "type": "string",  "label": "Comment" }
+            ]
+          },
+          "assignee": null
+        }
+      }
+    ],
+    "REVIEW_APPROVED": [{ "next": "COMPLETE" }],
+    "COMPLETE_FINISHED": [{ "next": "COMPLETED" }]
+  },
+  "compensations": {}
+}
+```
+*Start with: `{"definitionName": "HUMAN_TASK_FLOW", "initialData": {"submitter": "alice"}}`. After SUBMIT finishes, a `HumanTask` record is created. Call `POST /api/tasks/{taskId}/complete` with `{"resultData": {"approved": true, "comment": "LGTM"}}` to resume.*
 
 ### 10.2. Mock Process Instances (Various States)
 
@@ -1024,7 +1166,68 @@ const mockMetrics: MetricsSummaryResponse = {
 };
 ```
 
-### 10.5. Mock Webhook Subscriptions
+### 10.5. Mock Human Tasks
+
+```typescript
+const mockHumanTasks: HumanTaskResponse[] = [
+  {
+    id: "ht-0001-0001-0001-000000000001",
+    processInstanceId: "a1b2c3d4-0001-0001-0001-000000000004",
+    processDefinitionName: "LOAN_APPROVAL",
+    taskName: "Manual Loan Review",
+    signalEvent: "APPROVAL_GRANTED",
+    formSchema: {
+      fields: [
+        { name: "approved", type: "boolean", label: "Approve?" },
+        { name: "notes",    type: "string",  label: "Notes" }
+      ]
+    },
+    assignee: null,
+    status: "PENDING",
+    createdAt: "2026-03-11T09:10:03",
+    completedAt: null,
+    resultData: null
+  },
+  {
+    id: "ht-0001-0001-0001-000000000002",
+    processInstanceId: "a1b2c3d4-0001-0001-0001-000000000011",
+    processDefinitionName: "HUMAN_TASK_FLOW",
+    taskName: "Review Submission",
+    signalEvent: "REVIEW_APPROVED",
+    formSchema: {
+      fields: [
+        { name: "approved", type: "boolean", label: "Approve?" },
+        { name: "comment",  type: "string",  label: "Comment" }
+      ]
+    },
+    assignee: null,
+    status: "PENDING",
+    createdAt: "2026-03-11T10:00:00",
+    completedAt: null,
+    resultData: null
+  },
+  {
+    id: "ht-0001-0001-0001-000000000003",
+    processInstanceId: "a1b2c3d4-0001-0001-0001-000000000002",
+    processDefinitionName: "LOAN_APPROVAL",
+    taskName: "Manual Loan Review",
+    signalEvent: "APPROVAL_GRANTED",
+    formSchema: {
+      fields: [
+        { name: "approved", type: "boolean", label: "Approve?" },
+        { name: "notes",    type: "string",  label: "Notes" }
+      ]
+    },
+    assignee: null,
+    status: "COMPLETED",
+    createdAt: "2026-03-11T08:31:00",
+    completedAt: "2026-03-11T08:31:45",
+    resultData: { approved: true, notes: "Credit history looks good" }
+  }
+];
+```
+
+### 10.6. Mock Webhook Subscriptions
 
 ```typescript
 const mockWebhooks: WebhookSubscriptionResponse[] = [
@@ -1076,7 +1279,8 @@ Output: { nodes: Node[], edges: Edge[] }
 - Add `COMPLETED` as a terminal node.
 
 **Step 2 — Classify each step's node type** by examining which transition rule leads TO it:
-- If a rule with `suspend: true` targets this step → **Human Task** node
+- If a rule with `humanTask !== null` targets this step → **Human Task** node (first-class; display `humanTask.taskName`)
+- If a rule with `suspend: true` (and no `humanTask`) targets this step → **Human Task** node (legacy)
 - If a rule with `delayMs` targets this step → **Timer** node
 - If a rule with `callActivity` targets this step → **Sub-Process** node (the step AFTER the call)
 - If a rule with `httpRequest` targets this step → **HTTP Task** node (the step AFTER the HTTP call)
@@ -1140,7 +1344,7 @@ The execution will follow atomic, actionable tasks to maintain high velocity and
 - [ ] **1.6:** Setup an Axios instance/interceptor with a configurable base URL (`import.meta.env.VITE_API_URL`) and global error handling.
 
 ### 12.2. Sprint 2: Core Layout & Routing Shell
-- [ ] **2.1:** Develop the `Sidebar` component mapping out primary navigation links (`/`, `/definitions`, `/instances`, `/webhooks`).
+- [ ] **2.1:** Develop the `Sidebar` component mapping out primary navigation links (`/`, `/definitions`, `/instances`, `/tasks`, `/webhooks`).
 - [ ] **2.2:** Develop the `TopBar` component featuring breadcrumb navigation and a Dark/Light Theme Toggle.
 - [ ] **2.3:** Create the `AppShell` layout wrapper that coordinates the Sidebar, TopBar, and `<Outlet />`.
 - [ ] **2.4:** Configure React Router in `App.tsx` defining standard layout routes and lazy-loaded page components for performance.
@@ -1149,7 +1353,7 @@ The execution will follow atomic, actionable tasks to maintain high velocity and
 ### 12.3. Sprint 3: API Integration, Mocking & Dashboard
 - [ ] **3.1:** Create `types/api.ts` mapping all backend DTOs (e.g., `ProcessInstanceResponse`, `MetricsSummaryResponse`, `TransitionRule`).
 - [ ] **3.2:** Implement an API Adapter or MSW (Mock Service Worker) configuration (`VITE_USE_MOCK_DATA=true`).
-- [ ] **3.3:** Populate the mock definition store with the 10 example flows from the backend's `README.md` (e.g., `DEFAULT_FLOW`, `LOAN_APPROVAL`, `ORDER_FULFILLMENT`, `PARALLEL_FLOW`, `PAYMENT_SAGA`, `DELAY_FLOW`, `CREDIT_CHECK_SUB`, `SUB_PROCESS_FLOW`, `SCATTER_GATHER_FLOW`, `HTTP_STEP_FLOW`).
+- [ ] **3.3:** Populate the mock definition store with the 11 example flows from the backend's `README.md` (e.g., `DEFAULT_FLOW`, `LOAN_APPROVAL`, `ORDER_FULFILLMENT`, `PARALLEL_FLOW`, `PAYMENT_SAGA`, `DELAY_FLOW`, `CREDIT_CHECK_SUB`, `SUB_PROCESS_FLOW`, `SCATTER_GATHER_FLOW`, `HTTP_STEP_FLOW`, `HUMAN_TASK_FLOW`). Also populate the mock human task store using the data from section 10.5.
 - [ ] **3.4:** Create mock responses for metrics (`/api/metrics/summary`) and recent process instances to support dashboard development without the backend.
 - [ ] **3.5:** Write custom React Query hooks for fetching metrics (`useMetricsSummary`) that pass through the API Adapter.
 - [ ] **3.6:** Implement Dashboard metrics cards mapping data to dynamic Lucide icons and colors based on health/status.
@@ -1180,10 +1384,34 @@ The execution will follow atomic, actionable tasks to maintain high velocity and
 - [ ] **6.6:** Build and integrate the "Signal Modal" form (Event Type input, Data JSON input) calling `/api/processes/{id}/signal`.
 - [ ] **6.7:** Build the "Replay / Time-Travel Modal". Pull the audit trail, allow the user to select an eligible `PROCESS_STARTED` or `STEP_TRANSITION` event, and submit to `/api/processes/{id}/replay?fromStep=X`.
 
-### 12.7. Sprint 7: Webhooks & Final Polish
-- [ ] **7.1:** Write Webhook CRUD and Toggle query/mutation hooks.
-- [ ] **7.2:** Build the Webhooks management table displaying active states and subscribed events.
-- [ ] **7.3:** Build the Webhook creation Slide-out Panel (URL input, Event Multi-select using a custom combobox or checkboxes, Secret input).
-- [ ] **7.4:** Implement Empty States and Loading Skeletons (`shadcn/ui` Skeleton) across all tables and dashboard widgets.
-- [ ] **7.5:** Audit responsive layouts to ensure the frontend works effectively on smaller laptop screens or tablets.
-- [ ] **7.6:** Final QA, console warning cleanups, and deploy configuration settings (e.g., multi-environment `env` support).
+### 12.7. Sprint 7: Human Task Inbox
+
+The Human Task Inbox is a distinct page (`/tasks`) that acts as the task-worker UI. It integrates exclusively with the `/api/tasks` endpoints.
+
+- [ ] **7.1:** Add `HumanTaskResponse`, `HumanTaskDefinition`, `HumanTaskStatus`, and `CompleteTaskRequest` to `types/api.ts`.
+- [ ] **7.2:** Write custom React Query hooks:
+  - `useHumanTasks(status?, assignee?)` — queries `GET /api/tasks` with optional filters, `refetchInterval: 10000` for live updates.
+  - `useHumanTask(id)` — queries `GET /api/tasks/{id}`.
+  - `useCompleteTask()` — mutation for `POST /api/tasks/{id}/complete`; invalidates `useHumanTasks` on success.
+  - `useCancelTask()` — mutation for `POST /api/tasks/{id}/cancel`.
+- [ ] **7.3:** Build the Task Inbox page (`/tasks`):
+  - Left panel: filterable task list showing `taskName`, `processDefinitionName`, `assignee`, `createdAt`, and a `PENDING` badge.
+  - Right panel: when a task is selected, render the dynamic form from `formSchema.fields` and a "Complete" button.
+  - Add `?status=` and `?assignee=` filter controls in the command bar.
+- [ ] **7.4:** Build the `DynamicTaskForm` component:
+  - Reads `formSchema.fields` and renders the appropriate input per `type`: `boolean` → checkbox, `string` → text input, `number` → number input, `select` → dropdown (using `options` from the field schema if present).
+  - On submit, collects all field values into a `resultData` object and calls `useCompleteTask`.
+  - Shows a success toast on completion and reloads the task list.
+- [ ] **7.5:** Add sidebar navigation link for `/tasks` with an unread-count badge driven by `useHumanTasks({ status: "PENDING" }).data?.length`.
+- [ ] **7.6:** On the Process Detail page (`/instances/:id`):
+  - When `status === "SUSPENDED"`, add a "View Task" link that queries `GET /api/tasks?status=PENDING` and filters by `processInstanceId`, then navigates to `/tasks` with the task pre-selected.
+  - In the audit trail, render `HUMAN_TASK_CREATED`, `HUMAN_TASK_COMPLETED`, and `HUMAN_TASK_CANCELLED` events with a `UserCheck` icon and the task name from the audit `payload`.
+- [ ] **7.7:** Add MSW handlers for all four `/api/tasks` routes using the mock data from section 10.5.
+
+### 12.8. Sprint 8: Webhooks & Final Polish
+- [ ] **8.1:** Write Webhook CRUD and Toggle query/mutation hooks.
+- [ ] **8.2:** Build the Webhooks management table displaying active states and subscribed events.
+- [ ] **8.3:** Build the Webhook creation Slide-out Panel (URL input, Event Multi-select using a custom combobox or checkboxes, Secret input).
+- [ ] **8.4:** Implement Empty States and Loading Skeletons (`shadcn/ui` Skeleton) across all tables and dashboard widgets.
+- [ ] **8.5:** Audit responsive layouts to ensure the frontend works effectively on smaller laptop screens or tablets.
+- [ ] **8.6:** Final QA, console warning cleanups, and deploy configuration settings (e.g., multi-environment `env` support).

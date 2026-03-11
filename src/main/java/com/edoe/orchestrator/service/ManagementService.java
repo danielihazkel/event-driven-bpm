@@ -39,6 +39,7 @@ public class ManagementService {
     private final ObjectMapper objectMapper;
     private final AuditLogService auditLogService;
     private final WebhookDispatchService webhookDispatchService;
+    private final HumanTaskService humanTaskService;
 
     // --- Process Definitions ---
 
@@ -129,6 +130,7 @@ public class ManagementService {
                 fromStatus, ProcessStatus.CANCELLED, null);
         webhookDispatchService.dispatchTerminalEvent(id, instance.getDefinitionName(),
                 ProcessStatus.CANCELLED, instance.getContextData(), instance.getCompletedAt());
+        humanTaskService.cancelTasksForProcess(id);
 
         // Cascade cancel to any running child processes
         for (ProcessInstance child : instanceRepository.findByParentProcessId(id)) {

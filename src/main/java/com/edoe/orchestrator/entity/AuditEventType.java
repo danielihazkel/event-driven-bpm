@@ -40,5 +40,10 @@ public enum AuditEventType {
 
     // Webhook
     WEBHOOK_DISPATCHED,
-    WEBHOOK_FAILED
+    WEBHOOK_FAILED,
+
+    // Human tasks
+    HUMAN_TASK_CREATED,
+    HUMAN_TASK_COMPLETED,
+    HUMAN_TASK_CANCELLED
 }

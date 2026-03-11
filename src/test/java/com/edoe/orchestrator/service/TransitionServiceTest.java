@@ -15,6 +15,7 @@ import org.mockito.ArgumentCaptor;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
 
+import com.edoe.orchestrator.dto.HumanTaskDefinition;
 import com.edoe.orchestrator.dto.TransitionRule;
 import com.edoe.orchestrator.spi.HttpNativeStepExecutor;
 import com.edoe.orchestrator.spi.NativeStepResult;
@@ -52,6 +53,9 @@ class TransitionServiceTest {
     @Mock
     private WebhookDispatchService webhookDispatchService;
 
+    @Mock
+    private HumanTaskService humanTaskService;
+
     private TransitionService transitionService;
     private final ObjectMapper objectMapper = new ObjectMapper();
 
@@ -59,7 +63,7 @@ class TransitionServiceTest {
 
     @BeforeEach
     void setUp() {
-        transitionService = new TransitionService(repository, outboxRepository, definitionRepository, objectMapper, auditLogService, List.of(httpNativeStepExecutor), webhookDispatchService);
+        transitionService = new TransitionService(repository, outboxRepository, definitionRepository, objectMapper, auditLogService, List.of(httpNativeStepExecutor), webhookDispatchService, humanTaskService);
     }
 
     private ProcessDefinition definition(String name) {
@@ -1213,5 +1217,34 @@ class TransitionServiceTest {
         verify(httpNativeStepExecutor).execute(eq("STEP_1"), any(), any());
         assertThat(inst.getStatus()).isEqualTo(ProcessStatus.FAILED);
         verify(outboxRepository, never()).save(any());
+    }
+
+    // -------------------------------------------------------------------------
+    // Human Task tests (Phase 13)
+    // -------------------------------------------------------------------------
+
+    // 34. humanTask rule: process is suspended and HumanTaskService.createTask is called
+    @Test
+    void handleEvent_shouldCreateHumanTaskAndSuspendWhenHumanTaskRule() throws Exception {
+        UUID id = UUID.randomUUID();
+        HumanTaskDefinition taskDef = new HumanTaskDefinition(
+                "Manual Review", "APPROVAL_GRANTED",
+                Map.of("fields", List.of(Map.of("name", "approved", "type", "boolean"))),
+                null);
+        String humanTaskTransitionsJson = "{\"STEP_1_FINISHED\":[{\"next\":\"REVIEW_STEP\","
+                + "\"humanTask\":{\"taskName\":\"Manual Review\",\"signalEvent\":\"APPROVAL_GRANTED\","
+                + "\"formSchema\":{\"fields\":[{\"name\":\"approved\",\"type\":\"boolean\"}]}}}]}";
+        ProcessDefinition def = new ProcessDefinition("TEST_FLOW", "STEP_1", humanTaskTransitionsJson);
+        ProcessInstance inst = instanceWithId(id, "STEP_1", ProcessStatus.RUNNING, "{}");
+
+        when(repository.findById(id)).thenReturn(Optional.of(inst));
+        when(definitionRepository.findByNameAndVersion("TEST_FLOW", 1)).thenReturn(Optional.of(def));
+        when(repository.saveAndFlush(any())).thenAnswer(inv -> inv.getArgument(0));
+
+        transitionService.handleEvent(id.toString(), "STEP_1_FINISHED", Map.of());
+
+        assertThat(inst.getStatus()).isEqualTo(ProcessStatus.SUSPENDED);
+        assertThat(inst.getCurrentStep()).isEqualTo("REVIEW_STEP");
+        verify(humanTaskService).createTask(eq(inst), any(HumanTaskDefinition.class), any());
     }
 }

@@ -1,6 +1,7 @@
 package com.edoe.orchestrator.config;
 
 import com.edoe.orchestrator.dto.HttpRequestConfig;
+import com.edoe.orchestrator.dto.HumanTaskDefinition;
 import com.edoe.orchestrator.dto.TransitionRule;
 import com.edoe.orchestrator.entity.ProcessDefinition;
 import com.edoe.orchestrator.repository.ProcessDefinitionRepository;
@@ -46,6 +47,7 @@ public class DataInitializer implements CommandLineRunner {
         seedSubProcessFlow();
         seedScatterGatherFlow();
         seedHttpStepFlow();
+        seedHumanTaskFlow();
     }
 
     // -------------------------------------------------------------------------
@@ -60,15 +62,15 @@ public class DataInitializer implements CommandLineRunner {
 
     // -------------------------------------------------------------------------
     // LOAN_APPROVAL — credit-score based approval workflow
-    // Features: conditional branching (SpEL), human-in-the-loop suspend/signal
-    // (Phase 8)
+    // Features: conditional branching (SpEL), human task gate (Phase 13),
+    //           output mapping (Phase 11)
     //
     // Happy path (creditScore > 700):
     // VALIDATE_CREDIT → AUTO_APPROVE → DISBURSE_FUNDS → COMPLETED
     // Manual review path (creditScore <= 700):
-    // VALIDATE_CREDIT → MANUAL_REVIEW (SUSPENDED — awaits loan-officer signal)
-    // POST /api/processes/{id}/signal
-    // {"event":"APPROVAL_GRANTED","data":{"approved":true}}
+    // VALIDATE_CREDIT → MANUAL_REVIEW (SUSPENDED — HumanTask created, awaits completion)
+    // POST /api/tasks/{taskId}/complete
+    // {"resultData":{"approved":true,"notes":"Looks good"}}
     // → approved=true → DISBURSE_FUNDS → COMPLETED
     // → approved=false → SEND_REJECTION → COMPLETED
     // -------------------------------------------------------------------------
@@ -80,11 +82,20 @@ public class DataInitializer implements CommandLineRunner {
                         TransitionRule.ofMapped("#creditScore > 700", "AUTO_APPROVE",
                                 Map.of("creditScore",  "$.creditScore",
                                        "creditBureau", "$.meta.bureau")),
-                        TransitionRule.suspend(null, "MANUAL_REVIEW") // suspend: awaits signal
+                        // humanTask: creates a HumanTask record for the loan-officer frontend
+                        TransitionRule.humanTask(null, new HumanTaskDefinition(
+                                "Manual Loan Review",
+                                "APPROVAL_GRANTED",
+                                Map.of("fields", List.of(
+                                        Map.of("name", "approved", "type", "boolean", "label", "Approve?"),
+                                        Map.of("name", "notes",    "type", "string",  "label", "Notes")
+                                )),
+                                null // no assignee filter
+                        ), "MANUAL_REVIEW")
                 ),
                 "AUTO_APPROVE_FINISHED", List.of(
                         TransitionRule.of(null, "DISBURSE_FUNDS")),
-                // Signal key — matches the "event" field in POST /api/processes/{id}/signal
+                // Signal key — matches HumanTaskDefinition.signalEvent above
                 "APPROVAL_GRANTED", List.of(
                         TransitionRule.of("#approved == true", "DISBURSE_FUNDS"),
                         TransitionRule.of(null, "SEND_REJECTION") // default branch
@@ -246,6 +257,34 @@ public class DataInitializer implements CommandLineRunner {
                                         null),
                                 "STEP_2")),
                 "STEP_2_FINISHED", List.of(TransitionRule.of(null, "COMPLETED"))));
+    }
+
+    // -------------------------------------------------------------------------
+    // HUMAN_TASK_FLOW — simple 3-step flow demonstrating the human task gate
+    // Feature: humanTask rule suspends process and creates HumanTask record
+    //
+    // Flow:
+    // SUBMIT → REVIEW_TASK (SUSPENDED — HumanTask created) → COMPLETE → COMPLETED
+    //
+    // Start: {"definitionName":"HUMAN_TASK_FLOW","initialData":{"submitter":"alice"}}
+    // Complete: POST /api/tasks/{taskId}/complete
+    //           {"resultData":{"approved":true,"comment":"LGTM"}}
+    // -------------------------------------------------------------------------
+    private void seedHumanTaskFlow() {
+        upsert("HUMAN_TASK_FLOW", "SUBMIT", Map.of(
+                "SUBMIT_FINISHED", List.of(
+                        TransitionRule.humanTask(null, new HumanTaskDefinition(
+                                "Review Submission",
+                                "REVIEW_APPROVED",
+                                Map.of("fields", List.of(
+                                        Map.of("name", "approved", "type", "boolean", "label", "Approve?"),
+                                        Map.of("name", "comment",  "type", "string",  "label", "Comment")
+                                )),
+                                null
+                        ), "REVIEW_TASK")),
+                "REVIEW_APPROVED", List.of(
+                        TransitionRule.of(null, "COMPLETE")),
+                "COMPLETE_FINISHED", List.of(TransitionRule.of(null, "COMPLETED"))));
     }
 
     // -------------------------------------------------------------------------

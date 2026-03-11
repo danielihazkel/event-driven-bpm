@@ -82,6 +82,7 @@ POST /start-flow
 | Native HTTP REST Step | A transition rule can carry `httpRequest` (url, method, headers, body — all SpEL-able); the engine executes the HTTP call inline, skipping Kafka entirely. The JSON response is merged into `context_data` and the process advances to `next`. HTTP errors trigger the failure / compensation path. |
 | Webhook Subscriptions | Register HTTP POST listeners via `POST /api/webhooks`. When a process reaches a terminal state (`COMPLETED`, `FAILED`, `CANCELLED`), the engine fires asynchronous payloads to all matching subscriptions. Supports per-definition filtering, HMAC-SHA256 request signing (`X-Webhook-Signature`), 3-attempt retry with backoff, and full audit trail entries (`WEBHOOK_DISPATCHED` / `WEBHOOK_FAILED`). |
 | Pluggable Native Step Executors (SPI) | New step execution backends can be added by implementing `NativeStepExecutor` and annotating the class `@Service`. The engine discovers all implementations via Spring's `List<NativeStepExecutor>` injection and routes each transition rule to the first executor whose `canHandle()` returns `true`. The built-in HTTP step is now `HttpNativeStepExecutor` — a thin adapter over `HttpStepExecutor`. Adding gRPC, database, or script step types requires zero changes to `TransitionService`. |
+| Human Tasks (First-Class) | A transition rule can carry `humanTask` (with `taskName`, `signalEvent`, `formSchema`, and optional `assignee`). When matched, the engine suspends the process AND creates a `HumanTask` DB record. A separate task-inbox frontend discovers pending tasks via `GET /api/tasks`, renders the form from `formSchema`, and submits results via `POST /api/tasks/{id}/complete` — which atomically marks the task done and resumes the process. Cancelling a process auto-cancels its pending tasks. |
 
 ---
 
@@ -248,6 +249,54 @@ The HTTP response body is parsed as a JSON object and merged into `context_data`
 
 `httpRequest` can be combined with `condition` so the HTTP call is only made when the condition matches — subsequent unconditional branches act as the bypass path.
 
+### Human task rule (First-Class Human Tasks)
+
+When a rule carries `humanTask`, the engine suspends the process at `next` **and** creates a `HumanTask` record in the database, so a task-inbox frontend can discover, render, and complete it without polling `SUSPENDED` processes:
+
+```json
+{
+  "VALIDATE_CREDIT_FINISHED": [
+    { "condition": "#creditScore > 700", "next": "AUTO_APPROVE" },
+    {
+      "humanTask": {
+        "taskName": "Manual Loan Review",
+        "signalEvent": "APPROVAL_GRANTED",
+        "formSchema": {
+          "fields": [
+            { "name": "approved", "type": "boolean", "label": "Approve?" },
+            { "name": "notes",    "type": "string",  "label": "Notes" }
+          ]
+        }
+      },
+      "next": "MANUAL_REVIEW"
+    }
+  ]
+}
+```
+
+The `signalEvent` value **must** also exist as a key in the `transitions` map — it is the signal that resumes the process after task completion.
+
+| Field | Required | Description |
+|---|---|---|
+| `taskName` | yes | Human-readable name shown in the task list. |
+| `signalEvent` | yes | The event key the engine fires when the task is completed. Must be a `transitions` key. |
+| `formSchema` | no | Arbitrary JSON object that the frontend uses to render the task form dynamically. |
+| `assignee` | no | Literal string or SpEL expression (starts with `#`) resolved against the process context. |
+
+**Task lifecycle:**
+```
+humanTask rule matched
+  → process status = SUSPENDED, currentStep = <next>
+  → HumanTask record created (status = PENDING)
+     → frontend: GET /api/tasks?status=PENDING
+     → frontend: POST /api/tasks/{id}/complete  {"resultData": {"approved": true}}
+        → task status = COMPLETED, resultData stored
+        → engine: POST /api/processes/{pid}/signal automatically called
+           → process resumes normally via transitions["APPROVAL_GRANTED"]
+```
+
+Cancelling a process in any status also cancels all its PENDING human tasks.
+
 ### Pluggable Native Step Executors (SPI)
 
 The engine uses a **Spring plugin pattern** (`NativeStepExecutor` SPI) to dispatch non-Kafka steps. When a transition rule is matched, `TransitionService` streams over all registered `NativeStepExecutor` beans and picks the first whose `canHandle(rule)` returns `true`. If none matches, the step is dispatched via the normal Kafka outbox path.
@@ -346,7 +395,7 @@ Process Definitions can accept a `compensations` map. If a step fails with a `_F
 
 ## Example Flows (seeded on startup)
 
-Ten example flows are upserted into the database on every app startup. They always reflect the latest engine features. Use them to experiment without creating definitions manually.
+Eleven example flows are upserted into the database on every app startup. They always reflect the latest engine features. Use them to experiment without creating definitions manually.
 
 ### DEFAULT_FLOW
 
@@ -365,15 +414,15 @@ curl -s -X POST http://localhost:8080/start-flow \
 
 ### LOAN_APPROVAL
 
-Credit-score based approval with conditional branching and a human-in-the-loop suspend gate.
+Credit-score based approval with conditional branching, output mapping, and a **first-class human task** gate.
 
 ```
-                            ┌─ [creditScore > 700] ──→ AUTO_APPROVE ──────────────────┐
-VALIDATE_CREDIT ────────────┤                                                           ├→ DISBURSE_FUNDS → COMPLETED
-                            └─ [default] → MANUAL_REVIEW (SUSPENDED — awaits signal)  ─┤
-                                           POST /api/processes/{id}/signal             │
-                                             {"event":"APPROVAL_GRANTED","data":{...}} │
-                                               ├─ [approved == true] ─────────────────┘
+                            ┌─ [creditScore > 700] ──→ AUTO_APPROVE ───────────────────────────┐
+VALIDATE_CREDIT ────────────┤                                                                    ├→ DISBURSE_FUNDS → COMPLETED
+                            └─ [default] → MANUAL_REVIEW (SUSPENDED — HumanTask created)       ─┤
+                                           POST /api/tasks/{taskId}/complete                   │
+                                             {"resultData":{"approved":true,"notes":"LGTM"}}   │
+                                               ├─ [approved == true] ──────────────────────────┘
                                                └─ [default] ──→ SEND_REJECTION → COMPLETED
 ```
 
@@ -384,7 +433,7 @@ curl -s -X POST http://localhost:8080/start-flow \
   -d '{"definitionName": "LOAN_APPROVAL", "initialData": {"creditScore": 750}}'
 ```
 
-Start with a low credit score — process suspends at `MANUAL_REVIEW` until signalled:
+Start with a low credit score — process suspends at `MANUAL_REVIEW` and a HumanTask is created:
 ```bash
 # 1. Start the process
 curl -s -X POST http://localhost:8080/start-flow \
@@ -392,10 +441,15 @@ curl -s -X POST http://localhost:8080/start-flow \
   -d '{"definitionName": "LOAN_APPROVAL", "initialData": {"creditScore": 500}}'
 # → {"processId": "<id>"}  status=SUSPENDED at MANUAL_REVIEW
 
-# 2. Loan officer approves
-curl -s -X POST http://localhost:8080/api/processes/<id>/signal \
+# 2. Discover the pending task
+curl -s http://localhost:8080/api/tasks?status=PENDING
+# → [{id: "<taskId>", taskName: "Manual Loan Review", formSchema: {...}, ...}]
+
+# 3. Complete the task (loan officer submits the form)
+curl -s -X POST http://localhost:8080/api/tasks/<taskId>/complete \
   -H "Content-Type: application/json" \
-  -d '{"event": "APPROVAL_GRANTED", "data": {"approved": true}}'
+  -d '{"resultData": {"approved": true, "notes": "Credit history looks good"}}'
+# → process resumes automatically → DISBURSE_FUNDS → COMPLETED
 ```
 
 ### ORDER_FULFILLMENT
@@ -526,6 +580,32 @@ curl -s -X POST http://localhost:8080/start-flow \
 # → from the HTTP response, merged automatically before STEP_2 is dispatched
 ```
 
+### HUMAN_TASK_FLOW
+
+Demonstrates the first-class human task gate. After `SUBMIT` finishes, the engine suspends the process and creates a `HumanTask` record. The task-inbox frontend retrieves it, renders the form, and submits the result — which automatically resumes the process.
+
+```
+SUBMIT → REVIEW_TASK (SUSPENDED — HumanTask created) → COMPLETE → COMPLETED
+```
+
+```bash
+# 1. Start the flow
+curl -s -X POST http://localhost:8080/start-flow \
+  -H "Content-Type: application/json" \
+  -d '{"definitionName": "HUMAN_TASK_FLOW", "initialData": {"submitter": "alice"}}'
+# → {"processId": "<id>"}  status=SUSPENDED at REVIEW_TASK
+
+# 2. List pending tasks
+curl -s http://localhost:8080/api/tasks?status=PENDING
+# → [{id: "<taskId>", taskName: "Review Submission", formSchema: {...}}]
+
+# 3. Complete the task
+curl -s -X POST http://localhost:8080/api/tasks/<taskId>/complete \
+  -H "Content-Type: application/json" \
+  -d '{"resultData": {"approved": true, "comment": "LGTM"}}'
+# → task COMPLETED, process resumes to COMPLETE → COMPLETED
+```
+
 ---
 
 ## Audit Trail & Replay
@@ -609,6 +689,40 @@ Possible `status` values: `RUNNING`, `COMPLETED`, `FAILED`, `SUSPENDED`, `STALLE
 | `GET` | `/api/processes/{id}/audit` | Returns the ordered audit trail (all state transitions, commands, and events) for a process instance |
 | `POST` | `/api/processes/{id}/replay` | Rewinds the process to a historical step (validated against the audit trail) and re-queues its command; query param `fromStep` required |
 
+#### Human Tasks
+
+| Method | Path | Description |
+|---|---|---|
+| `GET` | `/api/tasks` | List human tasks. Optional: `?status=PENDING`, `?assignee=john` |
+| `GET` | `/api/tasks/{id}` | Get a single task by ID |
+| `POST` | `/api/tasks/{id}/complete` | Submit task result and auto-resume the suspended process |
+| `POST` | `/api/tasks/{id}/cancel` | Cancel a task without signalling the process |
+
+**Task completion flow:**
+```bash
+# Submit the form result — process resumes automatically
+curl -s -X POST http://localhost:8080/api/tasks/<taskId>/complete \
+  -H "Content-Type: application/json" \
+  -d '{"resultData": {"approved": true, "notes": "Looks good"}}'
+```
+
+Response (`HumanTaskResponse`):
+```json
+{
+  "id": "550e8400-...",
+  "processInstanceId": "123e4567-...",
+  "processDefinitionName": "LOAN_APPROVAL",
+  "taskName": "Manual Loan Review",
+  "signalEvent": "APPROVAL_GRANTED",
+  "formSchema": { "fields": [{ "name": "approved", "type": "boolean", "label": "Approve?" }] },
+  "assignee": null,
+  "status": "COMPLETED",
+  "createdAt": "2026-03-11T09:10:03",
+  "completedAt": "2026-03-11T09:15:42",
+  "resultData": { "approved": true, "notes": "Looks good" }
+}
+```
+
 #### Webhook Subscriptions
 
 | Method | Path | Description |
@@ -683,23 +797,29 @@ src/main/java/com/edoe/orchestrator/
 │   └── KafkaTopicConfig.java      # Topic declarations
 ├── controller/
 │   ├── GlobalExceptionHandler.java  # Maps exceptions to HTTP 404/409/400
+│   ├── HumanTaskController.java     # /api/tasks — list, get, complete, cancel
 │   ├── ManagementController.java    # /api/** management endpoints
 │   ├── ProcessController.java       # /start-flow and /status/{id}
 │   └── WebhookController.java       # /api/webhooks CRUD + toggle
 ├── dto/
 │   ├── AuditLogResponse.java
+│   ├── CompleteTaskRequest.java     # Body for POST /api/tasks/{id}/complete
 │   ├── HttpRequestConfig.java       # HTTP step config: url, method, headers, body (all SpEL-able)
+│   ├── HumanTaskDefinition.java     # Inline task spec in TransitionRule: taskName, signalEvent, formSchema, assignee
+│   ├── HumanTaskResponse.java       # Response DTO for human task endpoints
 │   ├── MetricsSummaryResponse.java
 │   ├── OrchestratorMessage.java     # Kafka message envelope
 │   ├── ProcessDefinitionRequest.java
 │   ├── ProcessDefinitionResponse.java
 │   ├── ProcessInstanceResponse.java
 │   ├── StartFlowRequest.java
-│   ├── TransitionRule.java          # Branch rule: {condition, next}, {parallel, joinStep}, {suspend}, {delayMs, next}, {callActivity, next}, {multiInstanceVariable}, {outputMapping}, or {httpRequest, next}
+│   ├── TransitionRule.java          # 11-component record: condition/next/parallel/joinStep/suspend/delayMs/callActivity/multiInstanceVariable/outputMapping/httpRequest/humanTask
 │   ├── WebhookSubscriptionRequest.java
 │   └── WebhookSubscriptionResponse.java
 ├── entity/
-│   ├── AuditEventType.java          # 28-constant enum for audit log event types
+│   ├── AuditEventType.java          # 31-constant enum (includes HUMAN_TASK_CREATED/COMPLETED/CANCELLED)
+│   ├── HumanTask.java               # human_tasks table
+│   ├── HumanTaskStatus.java         # PENDING / COMPLETED / CANCELLED
 │   ├── OutboxEvent.java             # outbox_events table
 │   ├── ProcessAuditLog.java         # process_audit_logs table (immutable, append-only)
 │   ├── ProcessDefinition.java       # process_definitions table
@@ -710,6 +830,7 @@ src/main/java/com/edoe/orchestrator/
 │   └── WorkerEventListener.java     # Consumes "worker-events" topic
 ├── repository/
 │   ├── AuditLogRepository.java
+│   ├── HumanTaskRepository.java     # findByStatus, findByProcessInstanceId, findByAssigneeAndStatus
 │   ├── OutboxEventRepository.java
 │   ├── ProcessDefinitionRepository.java
 │   ├── ProcessInstanceRepository.java
@@ -718,6 +839,7 @@ src/main/java/com/edoe/orchestrator/
 │   ├── AuditLogService.java          # Records and retrieves immutable audit entries
 │   ├── CommandPublisherService.java  # Kafka producer
 │   ├── HttpStepExecutor.java         # Executes inline HTTP calls for httpRequest rules (SpEL, RestTemplate)
+│   ├── HumanTaskService.java         # createTask, listTasks, getTask, completeTask, cancelTask, cancelTasksForProcess
 │   ├── ManagementService.java        # CRUD for definitions; process ops; metrics; replay
 │   ├── OutboxPublisherService.java   # Scheduled outbox poller
 │   ├── StepTimeoutService.java       # Scheduled stall detector

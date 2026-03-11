@@ -1,5 +1,6 @@
 package com.edoe.orchestrator.service;
 
+import com.edoe.orchestrator.dto.HumanTaskDefinition;
 import com.edoe.orchestrator.dto.TransitionRule;
 import com.edoe.orchestrator.entity.AuditEventType;
 import com.edoe.orchestrator.entity.OutboxEvent;
@@ -48,6 +49,7 @@ public class TransitionService {
     private final AuditLogService auditLogService;
     private final List<NativeStepExecutor> nativeExecutors;
     private final WebhookDispatchService webhookDispatchService;
+    private final HumanTaskService humanTaskService;
     private final ExpressionParser spelParser = new SpelExpressionParser();
 
     @Transactional
@@ -166,6 +168,9 @@ public class TransitionService {
             dispatchFork(instance, matched.parallel(), matched.joinStep(), mergedData);
         } else if (matched != null && matched.isMultiInstanceRule()) {
             dispatchMultiInstance(instance, matched.multiInstanceVariable(), matched.next(), matched.joinStep(), mergedData);
+        } else if (matched != null && matched.hasHumanTask()) {
+            suspendProcess(instance, matched.next(), mergedData);
+            humanTaskService.createTask(instance, matched.humanTask(), resolveAssignee(matched.humanTask(), mergedData));
         } else if (matched != null && matched.isSuspendGate()) {
             suspendProcess(instance, matched.next(), mergedData);
         } else if (matched != null && matched.isDelay()) {
@@ -293,6 +298,29 @@ public class TransitionService {
     // -------------------------------------------------------------------------
     // Suspend
     // -------------------------------------------------------------------------
+
+    /**
+     * Resolves the assignee value from a {@link HumanTaskDefinition}.
+     * If the assignee string starts with {@code #}, it is evaluated as a SpEL
+     * expression against the current process context; otherwise it is returned
+     * as a literal string. Null assignee is returned as-is.
+     */
+    private String resolveAssignee(HumanTaskDefinition def, Map<String, Object> context) {
+        String assignee = def.assignee();
+        if (assignee == null || assignee.isBlank()) return null;
+        if (assignee.startsWith("#")) {
+            try {
+                StandardEvaluationContext evalContext = new StandardEvaluationContext();
+                context.forEach(evalContext::setVariable);
+                Object result = spelParser.parseExpression(assignee).getValue(evalContext);
+                return result != null ? result.toString() : null;
+            } catch (EvaluationException e) {
+                log.warn("Could not evaluate assignee SpEL '{}': {}", assignee, e.getMessage());
+                return assignee; // fall back to literal
+            }
+        }
+        return assignee;
+    }
 
     /**
      * Parks the process at {@code suspendStep} with {@code status=SUSPENDED}.

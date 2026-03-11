@@ -104,31 +104,34 @@ public record TransitionRule(
         Map<String, String> outputMapping,
 
         @Schema(description = "When set, this step executes an HTTP call directly instead of dispatching to Kafka. SpEL is supported in url, header values, and body. On 2xx the response is merged into context_data and the process advances to 'next'; on any error the failure/compensation path is triggered.")
-        HttpRequestConfig httpRequest) {
+        HttpRequestConfig httpRequest,
+
+        @Schema(description = "When set, the process is suspended at 'next' and a HumanTask record is created. The frontend discovers pending tasks via GET /api/tasks and submits results via POST /api/tasks/{id}/complete, which auto-resumes the process.")
+        HumanTaskDefinition humanTask) {
 
     /** Factory for single-next rules (the common case). */
     public static TransitionRule of(String condition, String next) {
-        return new TransitionRule(condition, next, null, null, null, null, null, null, null, null);
+        return new TransitionRule(condition, next, null, null, null, null, null, null, null, null, null);
     }
 
     /** Factory for fork rules — fans out to all parallel steps, then joins at joinStep. */
     public static TransitionRule fork(List<String> parallel, String joinStep) {
-        return new TransitionRule(null, null, parallel, joinStep, null, null, null, null, null, null);
+        return new TransitionRule(null, null, parallel, joinStep, null, null, null, null, null, null, null);
     }
 
     /** Factory for suspend rules — routes to suspendStep and halts there until a signal arrives. */
     public static TransitionRule suspend(String condition, String suspendStep) {
-        return new TransitionRule(condition, suspendStep, null, null, Boolean.TRUE, null, null, null, null, null);
+        return new TransitionRule(condition, suspendStep, null, null, Boolean.TRUE, null, null, null, null, null, null);
     }
 
     /** Factory for delay rules — advances to next after delayMs milliseconds. */
     public static TransitionRule delay(Long delayMs, String next) {
-        return new TransitionRule(null, next, null, null, null, delayMs, null, null, null, null);
+        return new TransitionRule(null, next, null, null, null, delayMs, null, null, null, null, null);
     }
 
     /** Factory for call-activity rules — spawns a child process, then advances parent to nextAfterChild. */
     public static TransitionRule callActivity(String condition, String childDefinition, String nextAfterChild) {
-        return new TransitionRule(condition, nextAfterChild, null, null, null, null, childDefinition, null, null, null);
+        return new TransitionRule(condition, nextAfterChild, null, null, null, null, childDefinition, null, null, null, null);
     }
 
     /**
@@ -137,14 +140,14 @@ public record TransitionRule(
      * {@code miStep__MI__N} command per element, then advances to {@code joinStep}.
      */
     public static TransitionRule multiInstance(String multiInstanceVariable, String miStep, String joinStep) {
-        return new TransitionRule(null, miStep, null, joinStep, null, null, null, multiInstanceVariable, null, null);
+        return new TransitionRule(null, miStep, null, joinStep, null, null, null, multiInstanceVariable, null, null, null);
     }
 
     /**
      * Conditional variant of the multi-instance factory.
      */
     public static TransitionRule multiInstance(String condition, String multiInstanceVariable, String miStep, String joinStep) {
-        return new TransitionRule(condition, miStep, null, joinStep, null, null, null, multiInstanceVariable, null, null);
+        return new TransitionRule(condition, miStep, null, joinStep, null, null, null, multiInstanceVariable, null, null, null);
     }
 
     /**
@@ -161,7 +164,7 @@ public record TransitionRule(
      * </pre></p>
      */
     public static TransitionRule ofMapped(String condition, String next, Map<String, String> outputMapping) {
-        return new TransitionRule(condition, next, null, null, null, null, null, null, outputMapping, null);
+        return new TransitionRule(condition, next, null, null, null, null, null, null, outputMapping, null, null);
     }
 
     /**
@@ -179,7 +182,18 @@ public record TransitionRule(
      * </pre>
      */
     public static TransitionRule httpStep(String condition, HttpRequestConfig httpRequest, String next) {
-        return new TransitionRule(condition, next, null, null, null, null, null, null, null, httpRequest);
+        return new TransitionRule(condition, next, null, null, null, null, null, null, null, httpRequest, null);
+    }
+
+    /**
+     * Factory for human task rules.
+     * Suspends the process at {@code next} and creates a {@link HumanTaskDefinition}
+     * record so the frontend can discover, render, and submit the task.
+     * On submission via {@code POST /api/tasks/{id}/complete} the engine is
+     * automatically signalled to resume.
+     */
+    public static TransitionRule humanTask(String condition, HumanTaskDefinition humanTask, String suspendStep) {
+        return new TransitionRule(condition, suspendStep, null, null, null, null, null, null, null, null, humanTask);
     }
 
     /** Returns true if this rule represents a parallel fork. */
@@ -244,5 +258,15 @@ public record TransitionRule(
     @JsonIgnore
     public boolean hasHttpRequest() {
         return httpRequest != null;
+    }
+
+    /**
+     * Returns true if this rule creates a human task and suspends the process.
+     * Named {@code hasHumanTask} (not {@code isHumanTask}) to avoid any Java Bean
+     * getter collision with the {@code humanTask} component.
+     */
+    @JsonIgnore
+    public boolean hasHumanTask() {
+        return humanTask != null;
     }
 }
