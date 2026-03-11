@@ -27,12 +27,14 @@ This section details exactly how the frontend must communicate with the backend 
   ```json
   [
     {
+      "id": 1,
       "name": "LOAN_APPROVAL",
       "version": 1,
       "initialStep": "VALIDATE_CREDIT",
       "transitions": { ... },
       "compensations": { "RESERVE_INVENTORY": "UNDO_RESERVE_INVENTORY" },
-      "createdAt": "2026-03-11T09:00:00Z"
+      "createdAt": "2026-03-11T09:00:00Z",
+      "updatedAt": "2026-03-11T09:00:00Z"
     }
   ]
   ```
@@ -43,6 +45,10 @@ This section details exactly how the frontend must communicate with the backend 
 
 **Create/Update Definition**
 - **Endpoint:** `POST /api/definitions` (Create) or `PUT /api/definitions/{name}` (Update Version)
+
+**Delete Definition**
+- **Endpoint:** `DELETE /api/definitions/{name}`
+- **Response:** `204 No Content`
 - **Payload `ProcessDefinitionRequest`:**
   ```json
   {
@@ -94,7 +100,10 @@ This section details exactly how the frontend must communicate with the backend 
         "currentStep": "STEP_1",
         "status": "RUNNING", 
         "contextData": "{\"userId\": 42}",
-        "createdAt": "2026-03-11T09:01:00Z"
+        "createdAt": "2026-03-11T09:01:00Z",
+        "stepStartedAt": "2026-03-11T09:01:00Z",
+        "completedAt": null,
+        "parentProcessId": null
       }
     ],
     "totalPages": 1,
@@ -224,8 +233,9 @@ For all these, append to `/api/processes/{id}`.
 - **Purpose:** Deep dive into a single process execution, troubleshooting, and manual administrative intervention.
 - **Visuals & Components:**
   - **Header Ribbon:** Status badge, Process ID, timestamps. Administrative Action buttons: Cancel, Retry, Advance, Force Wake (if SCHEDULED), Signal (if SUSPENDED).
+  - **Context Navigation:** If `parentProcessId` exists, show an "Up to Parent Process" clickable link. If the process is `WAITING_FOR_CHILD`, query and list active sub-processes.
   - **Split Pane Layout:**
-    - **Left Side (Visual Tracker):** React Flow graph of the definition, with the `current_step` highlighted with a glowing pulse, completed steps marked green, and failed steps marked red.
+    - **Left Side (Visual Tracker):** React Flow graph of the definition, with the `current_step` highlighted with a glowing pulse, completed steps marked green, and failed steps marked red. The parser logic must strip suffixes like `__MI__\d+` from the active step name to correctly highlight the base step during scatter-gather flows.
     - **Right Side (Tabs):**
       1. **Context/Data:** Read-only generic JSON viewer for `contextData`.
       2. **Audit Trail:** Vertical timeline (using Tailwind standard timeline UI) decoding events from `/api/processes/{id}/audit`. 
@@ -240,7 +250,35 @@ For all these, append to `/api/processes/{id}`.
   - **Data Table:** Webhook URL, targeted events, definition filters, and an Active/Inactive toggle switch (`/api/webhooks/{id}/toggle`).
   - **Slide-out Panel / Modal:** Form to create a new subscription (target URL, multi-select for events, optional secret).
 
-## 6. Detailed Task Breakdown (Iterative To-Do List)
+## 6. Flow Patterns, Task Types & Visualization Guide
+
+To effectively build the workflow definitions and visualizer, the frontend must support the following orchestration patterns and task types.
+
+### 6.1. Supported Task & Node Types
+The `reactflow` implementation should include custom node components for the following natively supported step types:
+- **Default Task (External Worker):** A standard step that dispatches a Kafka command and waits for a `_FINISHED` event.
+  - *Visualization:* Standard rectangular node.
+- **HTTP Task (`httpRequest`):** A step that makes an inline HTTP call (GET, POST, etc.) using SpEL evaluated variables.
+  - *Visualization:* Node with an API/Globe icon or distinct color.
+- **Timer/Delay Task (`delayMs`):** A step that parks the process for a specific duration before advancing.
+  - *Visualization:* Node with a Clock/Timer icon.
+- **Human Task (`suspend: true`):** A step that pauses the process waiting for a manual API signal to resume.
+  - *Visualization:* Node indicating a "pause" or user action, styled uniquely (e.g., orange/yellow).
+- **Sub-Process Task (`callActivity`):** Sparks a child process from another definition and waits for its completion.
+  - *Visualization:* Node displaying a "layers" or "sub-flow" icon, indicating delegation to another flow.
+
+### 6.2. Workflow Patterns & Routing Rules
+The React Flow edge connections and node structures must support these complex routing patterns found in the `transitions` object:
+- **Conditional Branching / XOR Gateway:** A single step's transition array with multiple `{ condition, next }` rules.
+  - *Visualization:* A Diamond gateway node connected to the task. The edges connecting the diamond to subsequent steps must label the specific SpEL `condition` text. The first rule without a condition is the "Default" path.
+- **Parallel Fork & Join (AND Gateway):** A rule using `{ parallel: ["A", "B"], joinStep: "C" }`.
+  - *Visualization:* An outward Fork node spawning parallel edges to tasks A and B, converging onto an inward Join node before proceeding to C.
+- **Multi-Instance / Scatter-Gather:** A rule using `{ multiInstanceVariable: "items", next: "PROCESS", joinStep: "GATHER" }`.
+  - *Visualization:* A designated Multi-Instance node wrapper or icon on the `PROCESS` node (e.g., three horizontal stacked lines), indicating it dynamically fans out based on an array variable, converging at the `GATHER` step.
+- **Saga Compensations (Rollbacks):** Definitions can include a `compensations` map (e.g., `"STEP_A" -> "UNDO_STEP_A"`).
+  - *Visualization:* Secondary paths or dashed-line edges connecting a step to its compensation step, potentially triggered by a boundary error event icon.
+
+## 7. Detailed Task Breakdown (Iterative To-Do List)
 
 The execution will follow atomic, actionable tasks to maintain high velocity and manageable PRs.
 
@@ -280,9 +318,9 @@ The execution will follow atomic, actionable tasks to maintain high velocity and
 ### Sprint 5: Process Monitoring & Detail View
 - [ ] **5.1:** Write hooks (`useProcessInstances` with pagination and filter arguments).
 - [ ] **5.2:** Build the Instances table supporting backend pagination, definition dropdown filtering, and status filtering.
-- [ ] **5.3:** Build the Process Detail outer shell (`/instances/:id`) incorporating the Header Ribbon and dynamic Status Badges.
+- [ ] **5.3:** Build the Process Detail outer shell (`/instances/:id`) incorporating the Header Ribbon, dynamic Status Badges, and Parent/Child Navigation links. Add step duration calculations using `stepStartedAt`.
 - [ ] **5.4:** Implement automatic data refetching/polling (e.g., `refetchInterval: 3000`) for instances still in `RUNNING`, `SCHEDULED`, or `WAITING_FOR_CHILD`.
-- [ ] **5.5:** Embed the `DefinitionVisualizer` inside the Process Detail page. Enhance the adapter parser to apply specific styling (CSS classes/Tailwind) to the `current_step` node and failed nodes.
+- [ ] **5.5:** Embed the `DefinitionVisualizer` inside the Process Detail page. Enhance the adapter parser to apply specific styling (CSS classes/Tailwind) to the `current_step` node and failed nodes (including stripping `__MI__\d+` step suffixes for Multi-Instance support).
 
 ### Sprint 6: Audit Trail & Complex Interventions
 - [ ] **6.1:** Write the `useAuditTrail` query hook.
