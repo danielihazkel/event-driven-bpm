@@ -2,78 +2,102 @@
 
 ## Sprint 1: Project Initialization & Infrastructure
 - [ ] **1.1:** Initialize the project using `npm create vite@latest edoe-frontend -- --template react-ts`.
-- [ ] **1.2:** Install and configure `tailwindcss`, `postcss`, and `autoprefixer`. Initialize `tailwind.config.js`.
-- [ ] **1.3:** Setup absolute path aliases (e.g., `@/` maps to `./src/`) in `vite.config.ts` and `tsconfig.json`.
-- [ ] **1.4:** Install essential core libraries: `react-router-dom`, `@tanstack/react-query`, `lucide-react`, `axios`, `clsx`, `tailwind-merge`.
-- [ ] **1.5:** Run `npx shadcn-ui@latest init` to establish base design tokens and theme variables (CSS variables for dark/light modes).
-- [ ] **1.6:** Setup an Axios instance/interceptor with a configurable base URL (`import.meta.env.VITE_API_URL`) and global error handling.
+- [ ] **1.2:** Create folder structure: `src/{components,pages,hooks,lib,types,mocks}` with barrel `index.ts` files where appropriate.
+- [ ] **1.3:** Install and configure `tailwindcss`, `postcss`, and `autoprefixer`. Initialize `tailwind.config.js`.
+- [ ] **1.4:** Setup absolute path aliases (`@/` → `./src/`) in `vite.config.ts` and `tsconfig.json`.
+- [ ] **1.5:** Install core libraries: `react-router-dom`, `@tanstack/react-query`, `lucide-react`, `axios`, `clsx`, `tailwind-merge`.
+- [ ] **1.6:** Run `npx shadcn-ui@latest init` to establish base design tokens and CSS variables for dark/light modes.
+- [ ] **1.7:** Create `.env` and `.env.example` with `VITE_API_URL=http://localhost:8080` and `VITE_USE_MOCK_DATA=true`.
+- [ ] **1.8:** Configure Vite dev proxy in `vite.config.ts` to forward `/api` requests to `VITE_API_URL` (avoids CORS in local dev).
+- [ ] **1.9:** Setup an Axios instance in `lib/api-client.ts` with configurable base URL (`import.meta.env.VITE_API_URL`) and global error handling (toast on 4xx/5xx).
 
-## Sprint 2: Core Layout & Routing Shell
-- [ ] **2.1:** Develop the `Sidebar` component mapping out primary navigation links (`/`, `/definitions`, `/instances`, `/tasks`, `/webhooks`).
-- [ ] **2.2:** Develop the `TopBar` component featuring breadcrumb navigation and a Dark/Light Theme Toggle.
-- [ ] **2.3:** Create the `AppShell` layout wrapper that coordinates the Sidebar, TopBar, and `<Outlet />`.
-- [ ] **2.4:** Configure React Router in `App.tsx` defining standard layout routes and lazy-loaded page components for performance.
-- [ ] **2.5:** Add `shadcn/ui` foundational components: Button, Input, Card, Table, Dialog, Sheet, and Toaster (Sonner).
+## Sprint 2: Core Layout, Routing & Design System Shell
+- [ ] **2.1:** Add `shadcn/ui` components needed for layout: `Button`, `Input`, `Card`.
+- [ ] **2.2:** Add `shadcn/ui` data components: `Table`, `Dialog`, `Sheet`.
+- [ ] **2.3:** Add `shadcn/ui` feedback components: install `sonner`, add `Toaster` provider in `App.tsx`.
+- [ ] **2.4:** Install `@tanstack/react-query-devtools`. Add `ReactQueryDevtools` to `App.tsx` (dev-only).
+- [ ] **2.5:** Develop the `Sidebar` component with navigation links: `/` (Dashboard), `/definitions`, `/instances`, `/tasks`, `/webhooks`.
+- [ ] **2.6:** Develop the `TopBar` component with breadcrumb navigation and Dark/Light theme toggle.
+- [ ] **2.7:** Create the `AppShell` layout wrapper that coordinates `Sidebar`, `TopBar`, and `<Outlet />`.
+- [ ] **2.8:** Configure React Router in `App.tsx` with layout routes and lazy-loaded page components (`React.lazy`).
 
-## Sprint 3: API Integration, Mocking & Dashboard
-- [ ] **3.1:** Create `types/api.ts` mapping all backend DTOs (e.g., `ProcessInstanceResponse`, `MetricsSummaryResponse`, `TransitionRule`).
-- [ ] **3.2:** Implement an API Adapter or MSW (Mock Service Worker) configuration (`VITE_USE_MOCK_DATA=true`).
-- [ ] **3.3:** Populate the mock definition store with the 11 example flows from the backend's `README.md` (e.g., `DEFAULT_FLOW`, `LOAN_APPROVAL`, `ORDER_FULFILLMENT`, `PARALLEL_FLOW`, `PAYMENT_SAGA`, `DELAY_FLOW`, `CREDIT_CHECK_SUB`, `SUB_PROCESS_FLOW`, `SCATTER_GATHER_FLOW`, `HTTP_STEP_FLOW`, `HUMAN_TASK_FLOW`). Also populate the mock human task store using the data from section 10.5.
-- [ ] **3.4:** Create mock responses for metrics (`/api/metrics/summary`) and recent process instances to support dashboard development without the backend.
-- [ ] **3.5:** Write custom React Query hooks for fetching metrics (`useMetricsSummary`) that pass through the API Adapter.
-- [ ] **3.6:** Implement Dashboard metrics cards mapping data to dynamic Lucide icons and colors based on health/status.
-- [ ] **3.7:** Write custom hooks for fetching recent process instances.
-- [ ] **3.8:** Build the Dashboard Activity Table to display recent runs.
+## Sprint 3: TypeScript Types, Mock Data & API Layer
+- [ ] **3.1:** Create `types/api.ts` mapping all backend DTOs: `ProcessInstanceResponse`, `ProcessDefinitionResponse`, `MetricsSummaryResponse`, `TransitionRule`, `StartFlowRequest`, `SignalRequest`, `AuditLogResponse`, `HumanTaskResponse`, `HumanTaskDefinition`, `CompleteTaskRequest`, `WebhookSubscriptionResponse`, `WebhookSubscriptionRequest`, `ProcessStatus`, `HumanTaskStatus`, `AuditEventType`.
+- [ ] **3.2:** Implement the API adapter pattern: create `lib/api-adapter.ts` that checks `VITE_USE_MOCK_DATA` and routes calls to either real Axios endpoints or local mock stores. Export typed functions per endpoint (e.g., `getDefinitions()`, `getInstances()`, `getMetrics()`).
+- [ ] **3.3:** Populate mock definition store (`mocks/definitions.ts`) with all 11 seed flows from `DataInitializer` (`DEFAULT_FLOW`, `LOAN_APPROVAL`, `ORDER_FULFILLMENT`, `PARALLEL_FLOW`, `PAYMENT_SAGA`, `DELAY_FLOW`, `CREDIT_CHECK_SUB`, `SUB_PROCESS_FLOW`, `SCATTER_GATHER_FLOW`, `HTTP_STEP_FLOW`, `HUMAN_TASK_FLOW`). Include full `transitionsJson` and `compensationsJson` per flow.
+- [ ] **3.4:** Populate mock instance store (`mocks/instances.ts`) with sample `ProcessInstanceResponse` entries in various statuses (RUNNING, COMPLETED, FAILED, SUSPENDED, STALLED, CANCELLED, SCHEDULED, WAITING_FOR_CHILD). Include parent/child relationships for sub-process instances.
+- [ ] **3.5:** Populate mock human task store (`mocks/tasks.ts`) with sample `HumanTaskResponse` entries (PENDING and COMPLETED) including `formSchema` fields of varying types (string, boolean, number, select).
+- [ ] **3.6:** Create mock responses for metrics (`/api/metrics/summary`) and audit trail (`/api/processes/{id}/audit`) in `mocks/metrics.ts` and `mocks/audit.ts`.
 
-## Sprint 4: Process Definitions & Visualizer Setup
-- [ ] **4.1:** Write custom hooks (`useDefinitions`, `useCreateDefinition`, `useDeleteDefinition`).
-- [ ] **4.2:** Build the Definitions page with a data table and "Create New" context menu.
-- [ ] **4.3:** Install `@monaco-editor/react`. Build a reusable `JsonEditor` component for editing definition rules.
-- [ ] **4.4:** Build the "Start Flow" modal dialog (Definition selector, Version input, Monaco editor for `initialData`).
-- [ ] **4.5:** Install `reactflow`. Write an adapter parser function to transform EDOE `transitions_json` rules (conditional, parallel, sub-process) into React Flow `Node[]` and `Edge[]`.
-- [ ] **4.6:** Develop the `DefinitionVisualizer` component rendering the parsed node graph.
+## Sprint 4: Dashboard Page
+- [ ] **4.1:** Write React Query hook `useMetricsSummary` calling `GET /api/metrics/summary` through the API adapter.
+- [ ] **4.2:** Write React Query hook `useRecentInstances` calling `GET /api/processes?page=0&size=10` through the API adapter.
+- [ ] **4.3:** Build Dashboard metrics cards: map each status count from `MetricsSummaryResponse` to a card with dynamic Lucide icon, color, and label. Include `successRate` as a percentage card.
+- [ ] **4.4:** Build Dashboard Activity Table showing recent process instances with columns: definition name, current step, status badge, created time.
+- [ ] **4.5:** Add "Start New Flow" button on Dashboard that opens the Start Flow modal (built in Sprint 5).
 
-## Sprint 5: Process Monitoring & Detail View
-- [ ] **5.1:** Write hooks (`useProcessInstances` with pagination and filter arguments).
-- [ ] **5.2:** Build the Instances table supporting backend pagination, definition dropdown filtering, and status filtering.
-- [ ] **5.3:** Build the Process Detail outer shell (`/instances/:id`) incorporating the Header Ribbon, dynamic Status Badges, and Parent/Child Navigation links. Add step duration calculations using `stepStartedAt`.
-- [ ] **5.4:** Implement automatic data refetching/polling (e.g., `refetchInterval: 3000`) for instances still in `RUNNING`, `SCHEDULED`, or `WAITING_FOR_CHILD`.
-- [ ] **5.5:** Embed the `DefinitionVisualizer` inside the Process Detail page. Enhance the adapter parser to apply specific styling (CSS classes/Tailwind) to the `current_step` node and failed nodes (including stripping `__MI__\d+` step suffixes for Multi-Instance support).
+## Sprint 5: Process Definitions Page & Editor
+- [ ] **5.1:** Write React Query hooks: `useDefinitions` (`GET /api/definitions`), `useDefinition(name)` (`GET /api/definitions/{name}`).
+- [ ] **5.2:** Write mutation hook `useCreateDefinition` (`POST /api/definitions`) with toast on success/error, invalidates `useDefinitions`.
+- [ ] **5.3:** Write mutation hook `useUpdateDefinition` (`PUT /api/definitions/{name}`) for saving edits — creates a new version. Toast + invalidate on success.
+- [ ] **5.4:** Write mutation hook `useDeleteDefinition` (`DELETE /api/definitions/{name}`) with invalidation.
+- [ ] **5.5:** Build the Definitions list page with a data table (columns: name, version, initial step, created date) and a "Create New" button.
+- [ ] **5.6:** Build the Delete Definition confirmation dialog — triggered from a row action menu on the Definitions table.
+- [ ] **5.7:** Install `@monaco-editor/react`. Build a reusable `JsonEditor` component wrapping Monaco with JSON schema validation and dark mode support.
+- [ ] **5.8:** Build the Definition Editor page (`/definitions/:name`): displays current version info, `JsonEditor` for `transitionsJson` and `compensationsJson`, and a "Save" button that calls `useUpdateDefinition`.
+- [ ] **5.9:** Add a version selector dropdown on the Definition Editor page — fetches version history and allows viewing/editing older versions.
+- [ ] **5.10:** Build the "Start Flow" modal dialog: definition dropdown selector, optional version number input, Monaco editor for `initialData` JSON, and submit button calling `POST /start-flow`.
 
-## Sprint 6: Audit Trail & Complex Interventions
-- [ ] **6.1:** Write the `useAuditTrail` query hook.
-- [ ] **6.2:** Develop an `AuditTimeline` custom component leveraging Tailwind CSS borders/circles to visualize state changes and `contextSnapshot` payloads beautifully.
-- [ ] **6.3:** Build reusable JSON context viewer tab for real-time process state inspection.
-- [ ] **6.4:** Implement intervention mutation hooks: `useCancelProcess`, `useRetryProcess`, `useAdvanceProcess`, `useWakeProcess`.
-- [ ] **6.5:** Hook administrative mutation buttons in the Header Ribbon to their respective functions, including confirmation alerts.
-- [ ] **6.6:** Build and integrate the "Signal Modal" form (Event Type input, Data JSON input) calling `/api/processes/{id}/signal`.
-- [ ] **6.7:** Build the "Replay / Time-Travel Modal". Pull the audit trail, allow the user to select an eligible `PROCESS_STARTED` or `STEP_TRANSITION` event, and submit to `/api/processes/{id}/replay?fromStep=X`.
+## Sprint 6: Visualizer — Parser & Custom Nodes
+- [ ] **6.1:** Install `reactflow`. Create `lib/parser/types.ts` defining internal node/edge types for the visualizer (e.g., `FlowNode`, `FlowEdge`, `NodeType` enum).
+- [ ] **6.2:** Write parser step 1 — **linear chains**: transform a simple `transitions` map (each step has one unconditional `TransitionRule.of()`) into `Node[]` and `Edge[]`. Include START and END sentinel nodes.
+- [ ] **6.3:** Write parser step 2 — **conditional branches**: handle steps with multiple `TransitionRule` entries that have SpEL `condition` strings. Render as a diamond decision node with labeled edges per condition.
+- [ ] **6.4:** Write parser step 3 — **parallel fork/join**: detect `TransitionRule.fork()` rules (non-null `parallel` array + `joinStep`). Render fork node splitting into N parallel branches converging at the join step.
+- [ ] **6.5:** Write parser step 4 — **advanced patterns**: handle `callActivity` (sub-process call node), `delayMs` (timer node), `multiInstanceVariable` (scatter-gather node), `httpRequest` (HTTP step node), `humanTask` (human task node), `suspend` (approval gate node).
+- [ ] **6.6:** Write parser step 5 — **compensation edges**: parse `compensationsJson` map and render dashed reverse edges from each step to its compensation step.
+- [ ] **6.7:** Build custom React Flow node components: `StandardNode`, `DecisionNode` (diamond), `ForkNode`, `JoinNode`, `TimerNode`, `HttpNode`, `SubProcessNode`, `HumanTaskNode`, `StartNode`, `EndNode`. Each with appropriate icon (Lucide) and color coding.
+- [ ] **6.8:** Build the `DefinitionVisualizer` canvas component: renders React Flow with custom nodes, auto-layout (dagre or elkjs), zoom controls, and minimap. Accepts parsed `Node[]`/`Edge[]` as props.
+- [ ] **6.9:** Embed `DefinitionVisualizer` on the Definition Editor page below the JSON editor, updating live as JSON changes.
 
-## Sprint 7: Human Task Inbox
-- [ ] **7.1:** Add `HumanTaskResponse`, `HumanTaskDefinition`, `HumanTaskStatus`, and `CompleteTaskRequest` to `types/api.ts`.
-- [ ] **7.2:** Write custom React Query hooks:
-  - `useHumanTasks(status?, assignee?)` — queries `GET /api/tasks` with optional filters, `refetchInterval: 10000` for live updates.
-  - `useHumanTask(id)` — queries `GET /api/tasks/{id}`.
-  - `useCompleteTask()` — mutation for `POST /api/tasks/{id}/complete`; invalidates `useHumanTasks` on success.
-  - `useCancelTask()` — mutation for `POST /api/tasks/{id}/cancel`.
-- [ ] **7.3:** Build the Task Inbox page (`/tasks`):
-  - Left panel: filterable task list showing `taskName`, `processDefinitionName`, `assignee`, `createdAt`, and a `PENDING` badge.
-  - Right panel: when a task is selected, render the dynamic form from `formSchema.fields` and a "Complete" button.
-  - Add `?status=` and `?assignee=` filter controls in the command bar.
-- [ ] **7.4:** Build the `DynamicTaskForm` component:
-  - Reads `formSchema.fields` and renders the appropriate input per `type`: `boolean` → checkbox, `string` → text input, `number` → number input, `select` → dropdown (using `options` from the field schema if present).
-  - On submit, collects all field values into a `resultData` object and calls `useCompleteTask`.
-  - Shows a success toast on completion and reloads the task list.
-- [ ] **7.5:** Add sidebar navigation link for `/tasks` with an unread-count badge driven by `useHumanTasks({ status: "PENDING" }).data?.length`.
-- [ ] **7.6:** On the Process Detail page (`/instances/:id`):
-  - When `status === "SUSPENDED"`, add a "View Task" link that queries `GET /api/tasks?status=PENDING` and filters by `processInstanceId`, then navigates to `/tasks` with the task pre-selected.
-  - In the audit trail, render `HUMAN_TASK_CREATED`, `HUMAN_TASK_COMPLETED`, and `HUMAN_TASK_CANCELLED` events with a `UserCheck` icon and the task name from the audit `payload`.
-- [ ] **7.7:** Add MSW handlers for all four `/api/tasks` routes using the mock data from section 10.5.
+## Sprint 7: Process Instances List & Detail View
+- [ ] **7.1:** Write React Query hook `useProcessInstances` with pagination (`page`, `size`) and filter params (`definitionName`, `status`).
+- [ ] **7.2:** Build the Instances list page with data table, pagination controls, definition dropdown filter, and status filter chips.
+- [ ] **7.3:** Add a "Start New Flow" button on the Instances page that opens the same Start Flow modal from Sprint 5.
+- [ ] **7.4:** Build the Process Detail page header ribbon (`/instances/:id`): display definition name, version, process ID, and created timestamp.
+- [ ] **7.5:** Build dynamic status badge component mapping each `ProcessStatus` to a color and icon (e.g., RUNNING → blue spinner, FAILED → red X, SUSPENDED → amber pause).
+- [ ] **7.6:** Build parent/child navigation links on the Detail page: if `parentProcessId` is set, show "Parent Process" link; query `GET /api/processes` filtered by parent to list child processes.
+- [ ] **7.7:** Add step duration display: calculate elapsed time from `stepStartedAt` to now (if RUNNING) or to `completedAt` (if terminal).
+- [ ] **7.8:** Implement auto-polling: set `refetchInterval: 3000` on `useProcessInstance(id)` when status is `RUNNING`, `SCHEDULED`, or `WAITING_FOR_CHILD`.
+- [ ] **7.9:** Build a "Context Data" tab on the Detail page: parse `contextData` string with `JSON.parse()` (backend returns a JSON-encoded string, not an object) and render in a collapsible JSON tree viewer or Monaco read-only editor.
+- [ ] **7.10:** Embed `DefinitionVisualizer` on the Process Detail page with execution highlighting: apply distinct CSS classes to the `currentStep` node (e.g., green pulse for RUNNING, red for FAILED). Strip `__MI__\d+` suffixes before matching multi-instance steps.
 
-## Sprint 8: Webhooks & Final Polish
-- [ ] **8.1:** Write Webhook CRUD and Toggle query/mutation hooks.
-- [ ] **8.2:** Build the Webhooks management table displaying active states and subscribed events.
-- [ ] **8.3:** Build the Webhook creation Slide-out Panel (URL input, Event Multi-select using a custom combobox or checkboxes, Secret input).
-- [ ] **8.4:** Implement Empty States and Loading Skeletons (`shadcn/ui` Skeleton) across all tables and dashboard widgets.
-- [ ] **8.5:** Audit responsive layouts to ensure the frontend works effectively on smaller laptop screens or tablets.
-- [ ] **8.6:** Final QA, console warning cleanups, and deploy configuration settings (e.g., multi-environment `env` support).
+## Sprint 8: Audit Trail & Process Interventions
+- [ ] **8.1:** Write React Query hook `useAuditTrail(processId)` calling `GET /api/processes/{id}/audit`.
+- [ ] **8.2:** Build `AuditTimeline` component: vertical timeline using Tailwind CSS borders/circles, displaying each audit event with timestamp, `eventType` badge, and expandable `payload`/`contextSnapshot` JSON viewer.
+- [ ] **8.3:** Render human-task audit events (`HUMAN_TASK_CREATED`, `HUMAN_TASK_COMPLETED`, `HUMAN_TASK_CANCELLED`) with a `UserCheck` icon and task name from the audit payload.
+- [ ] **8.4:** Write mutation hook `useCancelProcess` — `POST /api/processes/{id}/cancel`, invalidates instance query, shows toast.
+- [ ] **8.5:** Write mutation hook `useRetryProcess` — `POST /api/processes/{id}/retry`, invalidates instance query, shows toast.
+- [ ] **8.6:** Write mutation hook `useAdvanceProcess` — `POST /api/processes/{id}/advance?toStep=`, invalidates instance query.
+- [ ] **8.7:** Write mutation hook `useWakeProcess` — `POST /api/processes/{id}/wake`, invalidates instance query.
+- [ ] **8.8:** Wire intervention buttons into the Detail page header ribbon: Cancel (with confirmation dialog), Retry, Advance (step input), Wake. Show/hide buttons based on current process status (e.g., Cancel only for RUNNING/SUSPENDED/WAITING_FOR_CHILD).
+- [ ] **8.9:** Build the "Signal Modal": form with Event Type text input and Data JSON editor (Monaco). Submits `POST /api/processes/{id}/signal` with `{ event, data }`. Only available when status is `SUSPENDED`.
+- [ ] **8.10:** Build the "Replay / Time-Travel Modal": load audit trail, filter to `PROCESS_STARTED` and `STEP_TRANSITION` events, let user select a step, and submit `POST /api/processes/{id}/replay?fromStep=X`. Show confirmation warning.
+
+## Sprint 9: Human Task Inbox
+- [ ] **9.1:** Write React Query hooks: `useHumanTasks(status?, assignee?)` with `refetchInterval: 10000`, `useHumanTask(id)`.
+- [ ] **9.2:** Write mutation hooks: `useCompleteTask(id)` (`POST /api/tasks/{id}/complete`), `useCancelTask(id)` (`POST /api/tasks/{id}/cancel`). Both invalidate `useHumanTasks` on success and show toast.
+- [ ] **9.3:** Build the Task Inbox left panel (`/tasks`): filterable task list with columns for `taskName`, `processDefinitionName`, `assignee`, `createdAt`, and `PENDING`/`COMPLETED` status badge. Add `?status=` and `?assignee=` filter controls.
+- [ ] **9.4:** Build the Task Inbox right panel: when a task is selected, show task details and the dynamic form (or a "Completed" summary if already done).
+- [ ] **9.5:** Build the `DynamicTaskForm` component: reads `formSchema.fields` and renders per-type inputs (`boolean` → checkbox, `string` → text input, `number` → number input, `select` → dropdown from `options`). On submit, collects values into `resultData` and calls `useCompleteTask`.
+- [ ] **9.6:** Add sidebar badge on `/tasks` nav link showing pending task count from `useHumanTasks({ status: "PENDING" })`.
+- [ ] **9.7:** On Process Detail page: when `status === "SUSPENDED"`, show a "View Task" link that queries pending tasks filtered by `processInstanceId` and navigates to `/tasks` with that task pre-selected.
+
+## Sprint 10: Webhooks & Final Polish
+- [ ] **10.1:** Write React Query hooks: `useWebhooks` (`GET /api/webhooks`), `useCreateWebhook` (`POST /api/webhooks`), `useDeleteWebhook` (`DELETE /api/webhooks/{id}`), `useToggleWebhook` (`PATCH /api/webhooks/{id}/toggle`).
+- [ ] **10.2:** Build the Webhooks list page with data table showing URL, subscribed events, active toggle switch, and delete action.
+- [ ] **10.3:** Build the Webhook creation slide-out panel (`Sheet`): URL input, event multi-select checkboxes (`COMPLETED`, `FAILED`, `CANCELLED`), optional secret input.
+- [ ] **10.4:** Implement empty states across all list pages: show a centered illustration + message + CTA button when no data exists (e.g., "No definitions yet — Create one").
+- [ ] **10.5:** Implement loading skeletons (`shadcn/ui Skeleton`) for: Dashboard metric cards, all data tables, Process Detail header, Audit Timeline.
+- [ ] **10.6:** Audit responsive layouts: ensure Sidebar collapses to icons on screens < 1024px, tables scroll horizontally on narrow viewports, modals/sheets are full-width on mobile.
+- [ ] **10.7:** Final QA: clear console warnings, verify all toast messages fire correctly, test dark/light mode across all pages, review accessibility (keyboard nav, aria labels on interactive elements).
+- [ ] **10.8:** Production build & deploy config: multi-environment `.env` support (`.env.production`, `.env.staging`), verify `vite build` output.
