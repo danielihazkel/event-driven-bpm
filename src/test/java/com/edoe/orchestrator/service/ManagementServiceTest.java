@@ -314,6 +314,7 @@ class ManagementServiceTest {
         when(instanceRepository.countByStatus(ProcessStatus.CANCELLED)).thenReturn(1L);
         when(instanceRepository.countByStatus(ProcessStatus.SCHEDULED)).thenReturn(0L);
         when(instanceRepository.countByStatus(ProcessStatus.WAITING_FOR_CHILD)).thenReturn(0L);
+        when(instanceRepository.countByStatus(ProcessStatus.COMPENSATION_FAILED)).thenReturn(0L);
 
         MetricsSummaryResponse summary = managementService.getMetricsSummary();
 
@@ -330,6 +331,60 @@ class ManagementServiceTest {
         MetricsSummaryResponse summary = managementService.getMetricsSummary();
 
         assertThat(summary.successRate()).isEqualTo(0.0);
+    }
+
+    @Test
+    void getMetricsSummary_includesCompensationFailedCount() {
+        when(instanceRepository.countByStatus(ProcessStatus.RUNNING)).thenReturn(0L);
+        when(instanceRepository.countByStatus(ProcessStatus.COMPLETED)).thenReturn(5L);
+        when(instanceRepository.countByStatus(ProcessStatus.FAILED)).thenReturn(0L);
+        when(instanceRepository.countByStatus(ProcessStatus.STALLED)).thenReturn(0L);
+        when(instanceRepository.countByStatus(ProcessStatus.CANCELLED)).thenReturn(0L);
+        when(instanceRepository.countByStatus(ProcessStatus.SCHEDULED)).thenReturn(0L);
+        when(instanceRepository.countByStatus(ProcessStatus.WAITING_FOR_CHILD)).thenReturn(0L);
+        when(instanceRepository.countByStatus(ProcessStatus.COMPENSATION_FAILED)).thenReturn(2L);
+
+        MetricsSummaryResponse summary = managementService.getMetricsSummary();
+
+        assertThat(summary.compensationFailed()).isEqualTo(2L);
+        assertThat(summary.total()).isEqualTo(7L);
+    }
+
+    @Test
+    void acknowledgeCompensationFailure_transitionsToCANCELLED() throws Exception {
+        UUID id = UUID.randomUUID();
+        ProcessInstance inst = instance(id, "FLOW", "COMPENSATE_PAYMENT", ProcessStatus.COMPENSATION_FAILED);
+        when(instanceRepository.findById(id)).thenReturn(Optional.of(inst));
+        when(instanceRepository.saveAndFlush(any())).thenAnswer(inv -> inv.getArgument(0));
+
+        ProcessInstanceResponse resp = managementService.acknowledgeCompensationFailure(id);
+
+        assertThat(resp.status()).isEqualTo(ProcessStatus.CANCELLED);
+        assertThat(resp.completedAt()).isNotNull();
+        verify(auditLogService).record(eq(id), eq(AuditEventType.COMPENSATION_ACKNOWLEDGED), any(), any(), any(), any());
+    }
+
+    @Test
+    void acknowledgeCompensationFailure_throwsWhenNotInCompensationFailed() throws Exception {
+        UUID id = UUID.randomUUID();
+        ProcessInstance inst = instance(id, "FLOW", "STEP_1", ProcessStatus.RUNNING);
+        when(instanceRepository.findById(id)).thenReturn(Optional.of(inst));
+
+        assertThatThrownBy(() -> managementService.acknowledgeCompensationFailure(id))
+                .isInstanceOf(IllegalStateException.class)
+                .hasMessageContaining("COMPENSATION_FAILED");
+    }
+
+    @Test
+    void cancelProcess_canCancelCompensationFailedProcess() throws Exception {
+        UUID id = UUID.randomUUID();
+        ProcessInstance inst = instance(id, "FLOW", "COMPENSATE_PAYMENT", ProcessStatus.COMPENSATION_FAILED);
+        when(instanceRepository.findById(id)).thenReturn(Optional.of(inst));
+        when(instanceRepository.saveAndFlush(any())).thenAnswer(inv -> inv.getArgument(0));
+
+        ProcessInstanceResponse resp = managementService.cancelProcess(id);
+
+        assertThat(resp.status()).isEqualTo(ProcessStatus.CANCELLED);
     }
 
     // --- Call Activity / Sub-Process tests ---
@@ -431,6 +486,7 @@ class ManagementServiceTest {
         when(instanceRepository.countByStatus(ProcessStatus.CANCELLED)).thenReturn(0L);
         when(instanceRepository.countByStatus(ProcessStatus.SCHEDULED)).thenReturn(0L);
         when(instanceRepository.countByStatus(ProcessStatus.WAITING_FOR_CHILD)).thenReturn(2L);
+        when(instanceRepository.countByStatus(ProcessStatus.COMPENSATION_FAILED)).thenReturn(0L);
 
         MetricsSummaryResponse summary = managementService.getMetricsSummary();
 

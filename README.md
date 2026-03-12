@@ -83,6 +83,9 @@ POST /start-flow
 | Webhook Subscriptions | Register HTTP POST listeners via `POST /api/webhooks`. When a process reaches a terminal state (`COMPLETED`, `FAILED`, `CANCELLED`), the engine fires asynchronous payloads to all matching subscriptions. Supports per-definition filtering, HMAC-SHA256 request signing (`X-Webhook-Signature`), 3-attempt retry with backoff, and full audit trail entries (`WEBHOOK_DISPATCHED` / `WEBHOOK_FAILED`). |
 | Pluggable Native Step Executors (SPI) | New step execution backends can be added by implementing `NativeStepExecutor` and annotating the class `@Service`. The engine discovers all implementations via Spring's `List<NativeStepExecutor>` injection and routes each transition rule to the first executor whose `canHandle()` returns `true`. The built-in HTTP step is now `HttpNativeStepExecutor` — a thin adapter over `HttpStepExecutor`. Adding gRPC, database, or script step types requires zero changes to `TransitionService`. |
 | Human Tasks (First-Class) | A transition rule can carry `humanTask` (with `taskName`, `signalEvent`, `formSchema`, and optional `assignee`). When matched, the engine suspends the process AND creates a `HumanTask` DB record. A separate task-inbox frontend discovers pending tasks via `GET /api/tasks`, renders the form from `formSchema`, and submits results via `POST /api/tasks/{id}/complete` — which atomically marks the task done and resumes the process. Cancelling a process auto-cancels its pending tasks. |
+| Compensation Failure Management | When a compensation (rollback) step itself fails, the process moves to `COMPENSATION_FAILED` status instead of plain `FAILED`. An `AlertService` fires an emergency alert (routed to the `alerts` SLF4J logger). Operators remediate the DB and then call `POST /api/processes/{id}/acknowledge-compensation-failure` to transition the process to `CANCELLED`. |
+| Distributed Scheduler Locking (ShedLock) | `StepTimeoutService`, `OutboxPublisherService`, and `TimerService` each hold a ShedLock on PostgreSQL before executing. Under horizontal scaling, only one replica runs each poller at a time, preventing duplicate outbox publishes and double-stalling. |
+| Security & RBAC (OAuth2 / JWT) | All REST endpoints are secured with Spring Security OAuth2 Resource Server (HMAC-SHA256 JWT). `ROLE_VIEWER` may read definitions, process state, and metrics. `ROLE_ADMIN` is required for any write, cancel, or advance operation. Swagger UI exposes a bearer-auth "Authorize" button. A dev-only `GET /dev/token` endpoint issues test tokens when the `dev` profile is active. |
 
 ---
 
@@ -660,7 +663,7 @@ curl -s -X POST http://localhost:8080/start-flow \
 curl -s http://localhost:8080/status/550e8400-e29b-41d4-a716-446655440000
 ```
 
-Possible `status` values: `RUNNING`, `COMPLETED`, `FAILED`, `SUSPENDED`, `STALLED`, `CANCELLED`, `SCHEDULED`, `WAITING_FOR_CHILD`.
+Possible `status` values: `RUNNING`, `COMPLETED`, `FAILED`, `SUSPENDED`, `STALLED`, `CANCELLED`, `SCHEDULED`, `WAITING_FOR_CHILD`, `COMPENSATION_FAILED`.
 
 ---
 
@@ -688,6 +691,7 @@ Possible `status` values: `RUNNING`, `COMPLETED`, `FAILED`, `SUSPENDED`, `STALLE
 | `POST` | `/api/processes/{id}/signal` | Injects a named signal event into a `SUSPENDED` process, resuming it from its current gate step |
 | `GET` | `/api/processes/{id}/audit` | Returns the ordered audit trail (all state transitions, commands, and events) for a process instance |
 | `POST` | `/api/processes/{id}/replay` | Rewinds the process to a historical step (validated against the audit trail) and re-queues its command; query param `fromStep` required |
+| `POST` | `/api/processes/{id}/acknowledge-compensation-failure` | Transitions a `COMPENSATION_FAILED` process to `CANCELLED` after manual DB remediation |
 
 #### Human Tasks
 
@@ -768,7 +772,37 @@ The engine retries up to 3 times (backoffs: 0 ms, 1 000 ms, 3 000 ms). Success a
 
 | Method | Path | Description |
 |---|---|---|
-| `GET` | `/api/metrics/summary` | Total, running, completed, failed, stalled, cancelled, scheduled, waitingForChild counts + success rate |
+| `GET` | `/api/metrics/summary` | Total, running, completed, failed, compensationFailed, stalled, cancelled, scheduled, waitingForChild counts + success rate |
+
+---
+
+## Security
+
+All endpoints require a valid JWT Bearer token (HMAC-SHA256 / HS256).
+
+| Role | Permissions |
+|---|---|
+| `ROLE_VIEWER` | `GET /api/**`, `GET /status/**` |
+| `ROLE_ADMIN` | Everything — `POST /start-flow`, all `POST/PUT/DELETE /api/**` |
+
+Swagger UI (`/swagger-ui.html`) has an **Authorize** button. Enter `Bearer <token>` to authenticate.
+
+### Obtaining a test token (dev profile only)
+
+```bash
+# Start with dev profile
+./mvnw spring-boot:run -Dspring-boot.run.profiles=dev
+
+# Get an admin token
+curl -s "http://localhost:8080/dev/token?role=ROLE_ADMIN"
+# → {"token": "<jwt>"}
+
+# Use it
+curl -s http://localhost:8080/api/definitions \
+  -H "Authorization: Bearer <jwt>"
+```
+
+Override the signing secret via the `JWT_SECRET` environment variable before deploying.
 
 ---
 
@@ -782,6 +816,7 @@ Key settings in `src/main/resources/application.yml`:
 | `edoe.orchestrator.stalled-check-interval-ms` | `60000` | How often the timeout scanner runs (ms) |
 | `edoe.orchestrator.outbox-poll-interval-ms` | `1000` | How often the outbox poller runs (ms) |
 | `edoe.orchestrator.timer-poll-interval-ms` | `5000` | How often the timer wakeup scanner runs (ms) |
+| `edoe.orchestrator.jwt.secret` | base64-encoded dev key | HMAC-SHA256 secret for JWT verification (override via `JWT_SECRET` env var) |
 
 ---
 
@@ -794,12 +829,16 @@ src/main/java/com/edoe/orchestrator/
 │   ├── DataInitializer.java       # Upserts example flows on every startup
 │   ├── HttpClientConfig.java      # RestTemplate bean (10s connect / 30s read)
 │   ├── KafkaConsumerConfig.java   # DLQ error handler (3 retries → *.DLT)
-│   └── KafkaTopicConfig.java      # Topic declarations
+│   ├── KafkaTopicConfig.java      # Topic declarations
+│   ├── OpenApiConfig.java         # Swagger bearer-auth SecurityScheme + global SecurityRequirement
+│   ├── SecurityConfig.java        # Spring Security filter chain: stateless JWT, RBAC rules
+│   └── ShedLockConfig.java        # ShedLock LockProvider (JdbcTemplateLockProvider, DB-clock)
 ├── controller/
 │   ├── GlobalExceptionHandler.java  # Maps exceptions to HTTP 404/409/400
 │   ├── HumanTaskController.java     # /api/tasks — list, get, complete, cancel
 │   ├── ManagementController.java    # /api/** management endpoints
 │   ├── ProcessController.java       # /start-flow and /status/{id}
+│   ├── TokenController.java         # GET /dev/token — dev-profile test JWT issuer
 │   └── WebhookController.java       # /api/webhooks CRUD + toggle
 ├── dto/
 │   ├── AuditLogResponse.java
@@ -817,14 +856,14 @@ src/main/java/com/edoe/orchestrator/
 │   ├── WebhookSubscriptionRequest.java
 │   └── WebhookSubscriptionResponse.java
 ├── entity/
-│   ├── AuditEventType.java          # 31-constant enum (includes HUMAN_TASK_CREATED/COMPLETED/CANCELLED)
+│   ├── AuditEventType.java          # 35-constant enum (includes COMPENSATION_FAILED/ACKNOWLEDGED, HUMAN_TASK_*)
 │   ├── HumanTask.java               # human_tasks table
 │   ├── HumanTaskStatus.java         # PENDING / COMPLETED / CANCELLED
 │   ├── OutboxEvent.java             # outbox_events table
 │   ├── ProcessAuditLog.java         # process_audit_logs table (immutable, append-only)
 │   ├── ProcessDefinition.java       # process_definitions table
 │   ├── ProcessInstance.java         # process_instances table
-│   ├── ProcessStatus.java           # RUNNING/COMPLETED/FAILED/SUSPENDED/STALLED/CANCELLED/SCHEDULED/WAITING_FOR_CHILD
+│   ├── ProcessStatus.java           # RUNNING/COMPLETED/FAILED/SUSPENDED/STALLED/CANCELLED/SCHEDULED/WAITING_FOR_CHILD/COMPENSATION_FAILED
 │   └── WebhookSubscription.java     # webhook_subscriptions table
 ├── listener/
 │   └── WorkerEventListener.java     # Consumes "worker-events" topic
@@ -836,14 +875,16 @@ src/main/java/com/edoe/orchestrator/
 │   ├── ProcessInstanceRepository.java
 │   └── WebhookSubscriptionRepository.java
 ├── service/
+│   ├── AlertService.java             # Interface: compensationFailed(processId, step, reason)
 │   ├── AuditLogService.java          # Records and retrieves immutable audit entries
 │   ├── CommandPublisherService.java  # Kafka producer
 │   ├── HttpStepExecutor.java         # Executes inline HTTP calls for httpRequest rules (SpEL, RestTemplate)
 │   ├── HumanTaskService.java         # createTask, listTasks, getTask, completeTask, cancelTask, cancelTasksForProcess
-│   ├── ManagementService.java        # CRUD for definitions; process ops; metrics; replay
-│   ├── OutboxPublisherService.java   # Scheduled outbox poller
-│   ├── StepTimeoutService.java       # Scheduled stall detector
-│   ├── TimerService.java             # Scheduled timer wakeup — resumes SCHEDULED processes
+│   ├── ManagementService.java        # CRUD for definitions; process ops; metrics; replay; acknowledgeCompensationFailure
+│   ├── OutboxPublisherService.java   # Scheduled outbox poller (@SchedulerLock: publishPendingEvents)
+│   ├── Slf4jAlertService.java        # AlertService impl — logs to "alerts" SLF4J logger at ERROR
+│   ├── StepTimeoutService.java       # Scheduled stall detector (@SchedulerLock: detectStalledProcesses)
+│   ├── TimerService.java             # Scheduled timer wakeup (@SchedulerLock: wakeExpiredTimers)
 │   ├── TransitionService.java        # State machine: evaluates SpEL branches, advances state
 │   ├── WebhookDispatchService.java   # @Async fire-and-forget webhook dispatcher (retry + HMAC)
 │   └── WebhookService.java           # CRUD for webhook subscriptions

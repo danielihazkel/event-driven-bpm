@@ -45,5 +45,9 @@ public enum AuditEventType {
     // Human tasks
     HUMAN_TASK_CREATED,
     HUMAN_TASK_COMPLETED,
-    HUMAN_TASK_CANCELLED
+    HUMAN_TASK_CANCELLED,
+
+    // Compensation failure management
+    COMPENSATION_FAILED,
+    COMPENSATION_ACKNOWLEDGED
 }

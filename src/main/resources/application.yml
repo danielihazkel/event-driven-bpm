@@ -2,6 +2,10 @@ spring:
   application:
     name: orchestrator
 
+  sql:
+    init:
+      mode: always
+
   datasource:
     url: jdbc:postgresql://localhost:5432/edoe
     username: edoe
@@ -37,8 +41,11 @@ edoe:
     stalled-check-interval-ms: 60000
     outbox-poll-interval-ms: 1000
     timer-poll-interval-ms: 5000
+    jwt:
+      secret: ${JWT_SECRET:dGhpcy1pcy1hLXRlc3Qtc2VjcmV0LWtleS0tLS0tLS0tLS0=}
 
 logging:
   level:
     com.edoe.orchestrator: DEBUG
     org.springframework.kafka: INFO
+    alerts: ERROR

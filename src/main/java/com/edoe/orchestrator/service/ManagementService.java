@@ -118,7 +118,8 @@ public class ManagementService {
                 && instance.getStatus() != ProcessStatus.STALLED
                 && instance.getStatus() != ProcessStatus.SUSPENDED
                 && instance.getStatus() != ProcessStatus.SCHEDULED
-                && instance.getStatus() != ProcessStatus.WAITING_FOR_CHILD) {
+                && instance.getStatus() != ProcessStatus.WAITING_FOR_CHILD
+                && instance.getStatus() != ProcessStatus.COMPENSATION_FAILED) {
             throw new IllegalStateException("Cannot cancel process in status: " + instance.getStatus());
         }
         ProcessStatus fromStatus = instance.getStatus();
@@ -210,6 +211,22 @@ public class ManagementService {
         return toInstanceResponse(instance);
     }
 
+    @Transactional
+    public ProcessInstanceResponse acknowledgeCompensationFailure(UUID id) {
+        ProcessInstance instance = instanceRepository.findById(id)
+                .orElseThrow(() -> new NoSuchElementException("Process not found: " + id));
+        if (instance.getStatus() != ProcessStatus.COMPENSATION_FAILED) {
+            throw new IllegalStateException(
+                    "Cannot acknowledge process not in COMPENSATION_FAILED status: " + instance.getStatus());
+        }
+        instance.setStatus(ProcessStatus.CANCELLED);
+        instance.setCompletedAt(LocalDateTime.now());
+        instanceRepository.saveAndFlush(instance);
+        auditLogService.record(id, AuditEventType.COMPENSATION_ACKNOWLEDGED, instance.getCurrentStep(),
+                ProcessStatus.COMPENSATION_FAILED, ProcessStatus.CANCELLED, null);
+        return toInstanceResponse(instance);
+    }
+
     // --- Replay ---
 
     @Transactional
@@ -298,10 +315,11 @@ public class ManagementService {
         long cancelled = instanceRepository.countByStatus(ProcessStatus.CANCELLED);
         long scheduled = instanceRepository.countByStatus(ProcessStatus.SCHEDULED);
         long waitingForChild = instanceRepository.countByStatus(ProcessStatus.WAITING_FOR_CHILD);
-        long total = running + completed + failed + stalled + cancelled + scheduled + waitingForChild;
+        long compensationFailed = instanceRepository.countByStatus(ProcessStatus.COMPENSATION_FAILED);
+        long total = running + completed + failed + stalled + cancelled + scheduled + waitingForChild + compensationFailed;
         long denominator = completed + failed + cancelled;
         double successRate = denominator > 0 ? (double) completed / denominator : 0.0;
-        return new MetricsSummaryResponse(total, running, completed, failed, stalled, cancelled, scheduled, waitingForChild, successRate);
+        return new MetricsSummaryResponse(total, running, completed, failed, stalled, cancelled, scheduled, waitingForChild, successRate, compensationFailed);
     }
 
     // --- Mapping helpers ---

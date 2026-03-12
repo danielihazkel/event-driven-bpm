@@ -138,6 +138,18 @@ public class ManagementController {
         return managementService.signalProcess(id, request.event(), request.data());
     }
 
+    @Operation(summary = "Acknowledge compensation failure",
+               description = "Acknowledges a COMPENSATION_FAILED process, transitioning it to CANCELLED")
+    @ApiResponses(value = {
+            @ApiResponse(responseCode = "200", description = "Compensation failure acknowledged"),
+            @ApiResponse(responseCode = "404", description = "Process instance not found"),
+            @ApiResponse(responseCode = "409", description = "Process is not in COMPENSATION_FAILED status")
+    })
+    @PostMapping("/processes/{id}/acknowledge-compensation-failure")
+    public ProcessInstanceResponse acknowledgeCompensationFailure(@PathVariable UUID id) {
+        return managementService.acknowledgeCompensationFailure(id);
+    }
+
     @Operation(summary = "Replay process from a historical step")
     @ApiResponses(value = {
             @ApiResponse(responseCode = "200", description = "Replay initiated"),

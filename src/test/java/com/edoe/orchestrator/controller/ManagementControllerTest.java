@@ -1,5 +1,6 @@
 package com.edoe.orchestrator.controller;
 
+import com.edoe.orchestrator.config.SecurityConfig;
 import com.edoe.orchestrator.dto.*;
 import com.edoe.orchestrator.entity.ProcessStatus;
 import com.edoe.orchestrator.service.ManagementService;
@@ -8,9 +9,11 @@ import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.autoconfigure.web.servlet.WebMvcTest;
 import org.springframework.boot.test.mock.mockito.MockBean;
+import org.springframework.context.annotation.Import;
 import org.springframework.data.domain.PageImpl;
-import org.springframework.data.domain.PageRequest;
 import org.springframework.http.MediaType;
+import org.springframework.security.test.context.support.WithMockUser;
+import org.springframework.test.context.TestPropertySource;
 import org.springframework.test.web.servlet.MockMvc;
 
 import com.edoe.orchestrator.dto.TransitionRule;
@@ -27,6 +30,8 @@ import static org.springframework.test.web.servlet.request.MockMvcRequestBuilder
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.*;
 
 @WebMvcTest({ ManagementController.class, GlobalExceptionHandler.class })
+@Import(SecurityConfig.class)
+@TestPropertySource(properties = "edoe.orchestrator.jwt.secret=dGhpcy1pcy1hLXRlc3Qtc2VjcmV0LWtleS0tLS0tLS0tLS0=")
 class ManagementControllerTest {
 
         @Autowired
@@ -51,6 +56,7 @@ class ManagementControllerTest {
         }
 
         @Test
+        @WithMockUser(roles = "VIEWER")
         void listDefinitions_returns200() throws Exception {
                 when(managementService.listDefinitions()).thenReturn(List.of(sampleDefinition("FLOW_A")));
 
@@ -60,6 +66,7 @@ class ManagementControllerTest {
         }
 
         @Test
+        @WithMockUser(roles = "ADMIN")
         void createDefinition_returns201() throws Exception {
                 ProcessDefinitionRequest req = new ProcessDefinitionRequest("NEW_FLOW", "STEP_1",
                                 Map.of("STEP_1_FINISHED", List.of(TransitionRule.of(null, "COMPLETED"))), Map.of());
@@ -73,6 +80,7 @@ class ManagementControllerTest {
         }
 
         @Test
+        @WithMockUser(roles = "ADMIN")
         void createDefinition_returns409WhenConflict() throws Exception {
                 ProcessDefinitionRequest req = new ProcessDefinitionRequest("EXISTING", "STEP_1", Map.of(), Map.of());
                 when(managementService.createDefinition(any()))
@@ -86,6 +94,7 @@ class ManagementControllerTest {
         }
 
         @Test
+        @WithMockUser(roles = "VIEWER")
         void getDefinition_returns200WhenFound() throws Exception {
                 when(managementService.getDefinition("MY_FLOW")).thenReturn(sampleDefinition("MY_FLOW"));
 
@@ -95,6 +104,7 @@ class ManagementControllerTest {
         }
 
         @Test
+        @WithMockUser(roles = "VIEWER")
         void getDefinition_returns404WhenMissing() throws Exception {
                 when(managementService.getDefinition("MISSING"))
                                 .thenThrow(new NoSuchElementException("Definition not found: MISSING"));
@@ -105,6 +115,7 @@ class ManagementControllerTest {
         }
 
         @Test
+        @WithMockUser(roles = "ADMIN")
         void deleteDefinition_returns409WhenActiveProcesses() throws Exception {
                 doThrow(new IllegalStateException("Cannot delete definition with active processes: BUSY"))
                                 .when(managementService).deleteDefinition("BUSY");
@@ -114,6 +125,7 @@ class ManagementControllerTest {
         }
 
         @Test
+        @WithMockUser(roles = "VIEWER")
         void listProcesses_returns200() throws Exception {
                 UUID id = UUID.randomUUID();
                 PageImpl<ProcessInstanceResponse> page = new PageImpl<>(
@@ -126,6 +138,7 @@ class ManagementControllerTest {
         }
 
         @Test
+        @WithMockUser(roles = "ADMIN")
         void cancelProcess_returns200() throws Exception {
                 UUID id = UUID.randomUUID();
                 ProcessInstanceResponse cancelled = new ProcessInstanceResponse(id, "FLOW", 1, "STEP_1",
@@ -139,6 +152,7 @@ class ManagementControllerTest {
         }
 
         @Test
+        @WithMockUser(roles = "ADMIN")
         void advanceProcess_returns200() throws Exception {
                 UUID id = UUID.randomUUID();
                 when(managementService.advanceProcess(id)).thenReturn(sampleInstance(id, ProcessStatus.RUNNING));
@@ -148,8 +162,9 @@ class ManagementControllerTest {
         }
 
         @Test
+        @WithMockUser(roles = "VIEWER")
         void getMetricsSummary_returns200() throws Exception {
-                MetricsSummaryResponse metrics = new MetricsSummaryResponse(17, 3, 10, 2, 1, 1, 0, 0, 0.77);
+                MetricsSummaryResponse metrics = new MetricsSummaryResponse(17, 3, 10, 2, 1, 1, 0, 0, 0.77, 0);
                 when(managementService.getMetricsSummary()).thenReturn(metrics);
 
                 mockMvc.perform(get("/api/metrics/summary"))
@@ -160,6 +175,7 @@ class ManagementControllerTest {
         }
 
         @Test
+        @WithMockUser(roles = "ADMIN")
         void signalProcess_returns200() throws Exception {
                 UUID id = UUID.randomUUID();
                 ProcessInstanceResponse resumed = new ProcessInstanceResponse(id, "LOAN_APPROVAL", 1, "DISBURSE_FUNDS",
@@ -177,6 +193,7 @@ class ManagementControllerTest {
         }
 
         @Test
+        @WithMockUser(roles = "ADMIN")
         void signalProcess_returns404WhenNotFound() throws Exception {
                 UUID id = UUID.randomUUID();
                 when(managementService.signalProcess(eq(id), any(), any()))
@@ -191,6 +208,7 @@ class ManagementControllerTest {
         }
 
         @Test
+        @WithMockUser(roles = "ADMIN")
         void signalProcess_returns409WhenNotSuspended() throws Exception {
                 UUID id = UUID.randomUUID();
                 when(managementService.signalProcess(eq(id), any(), any()))
@@ -206,6 +224,7 @@ class ManagementControllerTest {
         }
 
         @Test
+        @WithMockUser(roles = "ADMIN")
         void wakeProcess_returns200() throws Exception {
                 UUID id = UUID.randomUUID();
                 when(managementService.wakeProcess(id)).thenReturn(sampleInstance(id, ProcessStatus.RUNNING));
@@ -216,6 +235,7 @@ class ManagementControllerTest {
         }
 
         @Test
+        @WithMockUser(roles = "VIEWER")
         void getAuditTrail_returns200() throws Exception {
                 UUID id = UUID.randomUUID();
                 AuditLogResponse entry = new AuditLogResponse(
@@ -231,6 +251,33 @@ class ManagementControllerTest {
         }
 
         @Test
+        @WithMockUser(roles = "ADMIN")
+        void acknowledgeCompensationFailure_returns200() throws Exception {
+                UUID id = UUID.randomUUID();
+                ProcessInstanceResponse cancelled = new ProcessInstanceResponse(id, "FLOW", 1, "COMPENSATE_PAYMENT",
+                                ProcessStatus.CANCELLED, LocalDateTime.now(), LocalDateTime.now(), LocalDateTime.now(),
+                                "{}", null);
+                when(managementService.acknowledgeCompensationFailure(id)).thenReturn(cancelled);
+
+                mockMvc.perform(post("/api/processes/{id}/acknowledge-compensation-failure", id))
+                                .andExpect(status().isOk())
+                                .andExpect(jsonPath("$.status").value("CANCELLED"));
+        }
+
+        @Test
+        @WithMockUser(roles = "ADMIN")
+        void acknowledgeCompensationFailure_returns409WhenNotInCompensationFailed() throws Exception {
+                UUID id = UUID.randomUUID();
+                when(managementService.acknowledgeCompensationFailure(id))
+                                .thenThrow(new IllegalStateException("Cannot acknowledge process not in COMPENSATION_FAILED status: RUNNING"));
+
+                mockMvc.perform(post("/api/processes/{id}/acknowledge-compensation-failure", id))
+                                .andExpect(status().isConflict())
+                                .andExpect(jsonPath("$.error").exists());
+        }
+
+        @Test
+        @WithMockUser(roles = "ADMIN")
         void replayProcess_returns200() throws Exception {
                 UUID id = UUID.randomUUID();
                 ProcessInstanceResponse running = new ProcessInstanceResponse(id, "FLOW", 1, "STEP_1",
@@ -243,6 +290,7 @@ class ManagementControllerTest {
         }
 
         @Test
+        @WithMockUser(roles = "ADMIN")
         void replayProcess_stepNotFound_returns404() throws Exception {
                 UUID id = UUID.randomUUID();
                 when(managementService.replayFromStep(eq(id), eq("MISSING")))
@@ -254,6 +302,7 @@ class ManagementControllerTest {
         }
 
         @Test
+        @WithMockUser(roles = "VIEWER")
         void getAuditTrail_returns404WhenProcessMissing() throws Exception {
                 UUID id = UUID.randomUUID();
                 when(managementService.getAuditTrail(id))
@@ -262,5 +311,22 @@ class ManagementControllerTest {
                 mockMvc.perform(get("/api/processes/{id}/audit", id))
                                 .andExpect(status().isNotFound())
                                 .andExpect(jsonPath("$.error").exists());
+        }
+
+        @Test
+        @WithMockUser(roles = "VIEWER")
+        void viewerCannotPost_returns403() throws Exception {
+                ProcessDefinitionRequest req = new ProcessDefinitionRequest("NEW_FLOW", "STEP_1", Map.of(), Map.of());
+
+                mockMvc.perform(post("/api/definitions")
+                                .contentType(MediaType.APPLICATION_JSON)
+                                .content(objectMapper.writeValueAsString(req)))
+                                .andExpect(status().isForbidden());
+        }
+
+        @Test
+        void unauthenticated_returns401() throws Exception {
+                mockMvc.perform(get("/api/definitions"))
+                                .andExpect(status().isUnauthorized());
         }
 }

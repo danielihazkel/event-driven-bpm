@@ -5,6 +5,7 @@ import com.edoe.orchestrator.entity.ProcessInstance;
 import com.edoe.orchestrator.entity.ProcessStatus;
 import com.edoe.orchestrator.repository.ProcessInstanceRepository;
 import lombok.extern.slf4j.Slf4j;
+import net.javacrumbs.shedlock.spring.annotation.SchedulerLock;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.stereotype.Service;
@@ -30,6 +31,7 @@ public class StepTimeoutService {
     }
 
     @Scheduled(fixedDelayString = "${edoe.orchestrator.stalled-check-interval-ms:60000}")
+    @SchedulerLock(name = "detectStalledProcesses", lockAtLeastFor = "PT55S", lockAtMostFor = "PT5M")
     @Transactional
     public void detectStalledProcesses() {
         LocalDateTime threshold = LocalDateTime.now().minusMinutes(stepTimeoutMinutes);

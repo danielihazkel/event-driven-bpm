@@ -1,5 +1,6 @@
 package com.edoe.orchestrator.controller;
 
+import com.edoe.orchestrator.config.SecurityConfig;
 import com.edoe.orchestrator.dto.CompleteTaskRequest;
 import com.edoe.orchestrator.dto.HumanTaskResponse;
 import com.edoe.orchestrator.entity.HumanTask;
@@ -11,7 +12,10 @@ import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.autoconfigure.web.servlet.WebMvcTest;
 import org.springframework.boot.test.mock.mockito.MockBean;
+import org.springframework.context.annotation.Import;
 import org.springframework.http.MediaType;
+import org.springframework.security.test.context.support.WithMockUser;
+import org.springframework.test.context.TestPropertySource;
 import org.springframework.test.web.servlet.MockMvc;
 
 import java.lang.reflect.Field;
@@ -28,6 +32,8 @@ import static org.springframework.test.web.servlet.request.MockMvcRequestBuilder
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.*;
 
 @WebMvcTest({ HumanTaskController.class, GlobalExceptionHandler.class })
+@Import(SecurityConfig.class)
+@TestPropertySource(properties = "edoe.orchestrator.jwt.secret=dGhpcy1pcy1hLXRlc3Qtc2VjcmV0LWtleS0tLS0tLS0tLS0=")
 class HumanTaskControllerTest {
 
     @Autowired
@@ -60,6 +66,7 @@ class HumanTaskControllerTest {
     }
 
     @Test
+    @WithMockUser(roles = "VIEWER")
     void listTasks_returnsAllPending() throws Exception {
         UUID taskId = UUID.randomUUID();
         UUID processId = UUID.randomUUID();
@@ -73,6 +80,7 @@ class HumanTaskControllerTest {
     }
 
     @Test
+    @WithMockUser(roles = "VIEWER")
     void getTask_returns404WhenNotFound() throws Exception {
         UUID taskId = UUID.randomUUID();
         when(humanTaskService.getTask(taskId))
@@ -84,6 +92,7 @@ class HumanTaskControllerTest {
     }
 
     @Test
+    @WithMockUser(roles = "ADMIN")
     void completeTask_signalsProcess() throws Exception {
         UUID taskId = UUID.randomUUID();
         UUID processId = UUID.randomUUID();
@@ -105,6 +114,7 @@ class HumanTaskControllerTest {
     }
 
     @Test
+    @WithMockUser(roles = "ADMIN")
     void cancelTask_marksTaskCancelled() throws Exception {
         UUID taskId = UUID.randomUUID();
         UUID processId = UUID.randomUUID();

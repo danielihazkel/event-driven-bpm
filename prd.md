@@ -181,9 +181,9 @@ Conditions use **Spring Expression Language (SpEL)** and are evaluated against t
 
 ### Phase 13: Enterprise Readiness & Resiliency
 
-* [ ] **Distributed Task Scheduling / Locking:** Implement a distributed lock mechanism (e.g., ShedLock on PostgreSQL) for background pollers like `StepTimeoutService` and `OutboxPoller` to prevent race conditions when horizontally scaling Orchestrator replicas.
-* [ ] **Compensation Failure Management:** Support cases where Rollback commands themselves fail. Add a `COMPENSATION_FAILED` status, trigger emergency alerts, and provide a manual acknowledgement endpoint after DB remediation.
-* [ ] **Security & RBAC:** Secure Management REST APIs with OAuth2/JWT. Implement Role-Based Access Control distinguishing `ROLE_ADMIN` (edit definitions, cancel tasks) and `ROLE_VIEWER` (read metrics). Update Swagger UI with authentication requirements.
+* [x] **Distributed Task Scheduling / Locking:** Implement a distributed lock mechanism (e.g., ShedLock on PostgreSQL) for background pollers like `StepTimeoutService` and `OutboxPoller` to prevent race conditions when horizontally scaling Orchestrator replicas.
+* [x] **Compensation Failure Management:** Support cases where Rollback commands themselves fail. Add a `COMPENSATION_FAILED` status, trigger emergency alerts, and provide a manual acknowledgement endpoint after DB remediation.
+* [x] **Security & RBAC:** Secure Management REST APIs with OAuth2/JWT. Implement Role-Based Access Control distinguishing `ROLE_ADMIN` (edit definitions, cancel tasks) and `ROLE_VIEWER` (read metrics). Update Swagger UI with authentication requirements.
 
 ---
 

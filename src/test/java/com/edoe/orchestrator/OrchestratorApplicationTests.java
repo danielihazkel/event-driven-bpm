@@ -2,6 +2,7 @@ package com.edoe.orchestrator;
 
 import com.edoe.orchestrator.service.OutboxPublisherService;
 import com.edoe.orchestrator.service.StepTimeoutService;
+import com.edoe.orchestrator.service.TimerService;
 import com.edoe.orchestrator.service.WebhookDispatchService;
 import org.junit.jupiter.api.Test;
 import org.springframework.boot.test.context.SpringBootTest;
@@ -18,7 +19,9 @@ import org.springframework.test.context.TestPropertySource;
         "spring.datasource.password=",
         "spring.jpa.database-platform=org.hibernate.dialect.H2Dialect",
         "spring.jpa.properties.hibernate.dialect=org.hibernate.dialect.H2Dialect",
-        "spring.kafka.bootstrap-servers=localhost:9999"
+        "spring.kafka.bootstrap-servers=localhost:9999",
+        "spring.sql.init.mode=always",
+        "edoe.orchestrator.jwt.secret=dGhpcy1pcy1hLXRlc3Qtc2VjcmV0LWtleS0tLS0tLS0tLS0="
 })
 public class OrchestratorApplicationTests {
 
@@ -37,6 +40,9 @@ public class OrchestratorApplicationTests {
 
     @MockBean
     private WebhookDispatchService webhookDispatchService;
+
+    @MockBean
+    private TimerService timerService;
 
     @Test
     void contextLoads() {

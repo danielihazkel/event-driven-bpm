@@ -1,5 +1,6 @@
 package com.edoe.orchestrator.controller;
 
+import com.edoe.orchestrator.config.SecurityConfig;
 import com.edoe.orchestrator.dto.WebhookSubscriptionRequest;
 import com.edoe.orchestrator.dto.WebhookSubscriptionResponse;
 import com.edoe.orchestrator.service.WebhookService;
@@ -8,8 +9,11 @@ import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.autoconfigure.web.servlet.WebMvcTest;
 import org.springframework.boot.test.mock.mockito.MockBean;
+import org.springframework.context.annotation.Import;
 import org.springframework.data.domain.PageImpl;
 import org.springframework.http.MediaType;
+import org.springframework.security.test.context.support.WithMockUser;
+import org.springframework.test.context.TestPropertySource;
 import org.springframework.test.web.servlet.MockMvc;
 
 import java.time.LocalDateTime;
@@ -24,6 +28,8 @@ import static org.springframework.test.web.servlet.request.MockMvcRequestBuilder
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.*;
 
 @WebMvcTest({ WebhookController.class, GlobalExceptionHandler.class })
+@Import(SecurityConfig.class)
+@TestPropertySource(properties = "edoe.orchestrator.jwt.secret=dGhpcy1pcy1hLXRlc3Qtc2VjcmV0LWtleS0tLS0tLS0tLS0=")
 class WebhookControllerTest {
 
     @Autowired
@@ -42,6 +48,7 @@ class WebhookControllerTest {
     }
 
     @Test
+    @WithMockUser(roles = "ADMIN")
     void createSubscription_returns201() throws Exception {
         UUID id = UUID.randomUUID();
         WebhookSubscriptionRequest req = new WebhookSubscriptionRequest(
@@ -56,6 +63,7 @@ class WebhookControllerTest {
     }
 
     @Test
+    @WithMockUser(roles = "VIEWER")
     void listSubscriptions_returns200() throws Exception {
         UUID id = UUID.randomUUID();
         when(webhookService.listSubscriptions(any()))
@@ -67,6 +75,7 @@ class WebhookControllerTest {
     }
 
     @Test
+    @WithMockUser(roles = "VIEWER")
     void getSubscription_returns200() throws Exception {
         UUID id = UUID.randomUUID();
         when(webhookService.getSubscription(id)).thenReturn(sampleResponse(id));
@@ -77,6 +86,7 @@ class WebhookControllerTest {
     }
 
     @Test
+    @WithMockUser(roles = "ADMIN")
     void deleteSubscription_returns204() throws Exception {
         UUID id = UUID.randomUUID();
         doNothing().when(webhookService).deleteSubscription(id);
@@ -86,6 +96,7 @@ class WebhookControllerTest {
     }
 
     @Test
+    @WithMockUser(roles = "ADMIN")
     void toggleSubscription_returns200() throws Exception {
         UUID id = UUID.randomUUID();
         WebhookSubscriptionResponse toggled = new WebhookSubscriptionResponse(

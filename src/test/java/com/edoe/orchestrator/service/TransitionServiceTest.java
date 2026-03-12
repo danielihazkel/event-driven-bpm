@@ -56,6 +56,9 @@ class TransitionServiceTest {
     @Mock
     private HumanTaskService humanTaskService;
 
+    @Mock
+    private AlertService alertService;
+
     private TransitionService transitionService;
     private final ObjectMapper objectMapper = new ObjectMapper();
 
@@ -63,7 +66,7 @@ class TransitionServiceTest {
 
     @BeforeEach
     void setUp() {
-        transitionService = new TransitionService(repository, outboxRepository, definitionRepository, objectMapper, auditLogService, List.of(httpNativeStepExecutor), webhookDispatchService, humanTaskService);
+        transitionService = new TransitionService(repository, outboxRepository, definitionRepository, objectMapper, auditLogService, List.of(httpNativeStepExecutor), webhookDispatchService, humanTaskService, alertService);
     }
 
     private ProcessDefinition definition(String name) {
@@ -1246,5 +1249,34 @@ class TransitionServiceTest {
         assertThat(inst.getStatus()).isEqualTo(ProcessStatus.SUSPENDED);
         assertThat(inst.getCurrentStep()).isEqualTo("REVIEW_STEP");
         verify(humanTaskService).createTask(eq(inst), any(HumanTaskDefinition.class), any());
+    }
+
+    // -------------------------------------------------------------------------
+    // Compensation Failure Management tests (Phase 13)
+    // -------------------------------------------------------------------------
+
+    @Test
+    void handleEvent_compensationStepFails_setsCompensationFailedAndCallsAlert() throws Exception {
+        UUID id = UUID.randomUUID();
+        // Instance is in RUNNING status, compensating=true (mid-compensation)
+        ProcessInstance inst = instanceWithId(id, "COMPENSATE_PAYMENT", ProcessStatus.RUNNING, "{}");
+        inst.setCompensating(true);
+        inst.setCompletedSteps("[\"VALIDATE_ORDER\",\"CHARGE_PAYMENT\"]");
+
+        when(repository.findById(id)).thenReturn(Optional.of(inst));
+        when(repository.saveAndFlush(any())).thenAnswer(inv -> inv.getArgument(0));
+
+        // Fire a _FAILED event for the current compensation step
+        transitionService.handleEvent(id.toString(), "COMPENSATE_PAYMENT_FAILED", Map.of("error", "timeout"));
+
+        assertThat(inst.getStatus()).isEqualTo(ProcessStatus.COMPENSATION_FAILED);
+        assertThat(inst.getCompletedAt()).isNotNull();
+
+        verify(auditLogService).record(eq(id), eq(com.edoe.orchestrator.entity.AuditEventType.COMPENSATION_FAILED),
+                eq("COMPENSATE_PAYMENT"), eq(ProcessStatus.RUNNING), eq(ProcessStatus.COMPENSATION_FAILED), any());
+        verify(alertService).compensationFailed(eq(id), eq("COMPENSATE_PAYMENT"),
+                argThat(reason -> reason.contains("COMPENSATE_PAYMENT_FAILED")));
+        // Webhook must NOT be dispatched for compensation failure
+        verifyNoInteractions(webhookDispatchService);
     }
 }

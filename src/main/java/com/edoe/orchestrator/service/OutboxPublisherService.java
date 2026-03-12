@@ -7,6 +7,7 @@ import com.fasterxml.jackson.core.type.TypeReference;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
+import net.javacrumbs.shedlock.spring.annotation.SchedulerLock;
 import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
@@ -27,6 +28,7 @@ public class OutboxPublisherService {
     private final AuditLogService auditLogService;
 
     @Scheduled(fixedDelayString = "${edoe.orchestrator.outbox-poll-interval-ms:1000}")
+    @SchedulerLock(name = "publishPendingEvents", lockAtLeastFor = "PT500MS", lockAtMostFor = "PT30S")
     @Transactional
     public void publishPendingEvents() {
         List<OutboxEvent> pending = outboxRepository.findByPublishedFalseOrderByCreatedAtAsc();

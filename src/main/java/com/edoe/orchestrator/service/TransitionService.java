@@ -50,6 +50,7 @@ public class TransitionService {
     private final List<NativeStepExecutor> nativeExecutors;
     private final WebhookDispatchService webhookDispatchService;
     private final HumanTaskService humanTaskService;
+    private final AlertService alertService;
     private final ExpressionParser spelParser = new SpelExpressionParser();
 
     @Transactional
@@ -109,25 +110,28 @@ public class TransitionService {
         String expectedEvent = instance.getCurrentStep() + "_FINISHED";
         String failedEvent = instance.getCurrentStep() + "_FAILED";
 
-        if (eventType.equals(failedEvent)) {
-            handleFailure(instance, outputData);
-            return;
-        }
-
         if (instance.getCompensating() != null && instance.getCompensating()) {
             if (eventType.equals(expectedEvent)) {
                 Map<String, Object> mergedData = mergeContext(instance.getContextData(), outputData);
                 executeNextCompensation(instance, mergedData);
             } else if (eventType.equals(failedEvent)) {
-                instance.setStatus(ProcessStatus.FAILED);
+                instance.setStatus(ProcessStatus.COMPENSATION_FAILED);
                 instance.setCompletedAt(LocalDateTime.now());
                 repository.saveAndFlush(instance);
-                webhookDispatchService.dispatchTerminalEvent(instance.getId(), instance.getDefinitionName(),
-                        ProcessStatus.FAILED, instance.getContextData(), instance.getCompletedAt());
+                auditLogService.record(instance.getId(), AuditEventType.COMPENSATION_FAILED,
+                        instance.getCurrentStep(), ProcessStatus.RUNNING, ProcessStatus.COMPENSATION_FAILED,
+                        Map.of("event", eventType));
+                alertService.compensationFailed(instance.getId(), instance.getCurrentStep(),
+                        "Compensation step failed with event: " + eventType);
             } else {
                 log.warn("Ignoring event {} for compensating process {} (step={})", eventType, processId,
                         instance.getCurrentStep());
             }
+            return;
+        }
+
+        if (eventType.equals(failedEvent)) {
+            handleFailure(instance, outputData);
             return;
         }
 

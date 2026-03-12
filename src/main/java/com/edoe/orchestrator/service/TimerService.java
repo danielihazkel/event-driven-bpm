@@ -8,6 +8,7 @@ import com.edoe.orchestrator.repository.OutboxEventRepository;
 import com.edoe.orchestrator.repository.ProcessInstanceRepository;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
+import net.javacrumbs.shedlock.spring.annotation.SchedulerLock;
 import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
@@ -32,6 +33,7 @@ public class TimerService {
     private final AuditLogService auditLogService;
 
     @Scheduled(fixedDelayString = "${edoe.orchestrator.timer-poll-interval-ms:5000}")
+    @SchedulerLock(name = "wakeExpiredTimers", lockAtLeastFor = "PT4S", lockAtMostFor = "PT2M")
     @Transactional
     public void wakeExpiredTimers() {
         List<ProcessInstance> due = instanceRepository
