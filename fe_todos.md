@@ -10,6 +10,8 @@
 - [ ] **1.7:** Create `.env` and `.env.example` with `VITE_API_URL=http://localhost:8080` and `VITE_USE_MOCK_DATA=true`.
 - [ ] **1.8:** Configure Vite dev proxy in `vite.config.ts` to forward `/api` requests to `VITE_API_URL` (avoids CORS in local dev).
 - [ ] **1.9:** Setup an Axios instance in `lib/api-client.ts` with configurable base URL (`import.meta.env.VITE_API_URL`) and global error handling (toast on 4xx/5xx).
+- [ ] **1.10:** Implement JWT auth in `lib/api-client.ts`: attach `Authorization: Bearer <token>` header from `localStorage.getItem("edoe_token")` on every request; on 401 clear token and redirect to `/login`; on 403 show "Insufficient permissions" toast.
+- [ ] **1.11:** Build a minimal `/login` page with a token text input (for dev: instructions to hit `GET /dev/token`). Store the submitted token in `localStorage` and redirect to `/`.
 
 ## Sprint 2: Core Layout, Routing & Design System Shell
 - [ ] **2.1:** Add `shadcn/ui` components needed for layout: `Button`, `Input`, `Card`.
@@ -22,17 +24,17 @@
 - [ ] **2.8:** Configure React Router in `App.tsx` with layout routes and lazy-loaded page components (`React.lazy`).
 
 ## Sprint 3: TypeScript Types, Mock Data & API Layer
-- [ ] **3.1:** Create `types/api.ts` mapping all backend DTOs: `ProcessInstanceResponse`, `ProcessDefinitionResponse`, `MetricsSummaryResponse`, `TransitionRule`, `StartFlowRequest`, `SignalRequest`, `AuditLogResponse`, `HumanTaskResponse`, `HumanTaskDefinition`, `CompleteTaskRequest`, `WebhookSubscriptionResponse`, `WebhookSubscriptionRequest`, `ProcessStatus`, `HumanTaskStatus`, `AuditEventType`.
+- [ ] **3.1:** Create `types/api.ts` mapping all backend DTOs: `ProcessInstanceResponse`, `ProcessDefinitionResponse`, `MetricsSummaryResponse`, `TransitionRule`, `StartFlowRequest`, `SignalRequest`, `AuditLogResponse`, `HumanTaskResponse`, `HumanTaskDefinition`, `CompleteTaskRequest`, `WebhookSubscriptionResponse`, `WebhookSubscriptionRequest`, `ProcessStatus` (must include `COMPENSATION_FAILED`), `HumanTaskStatus`, `AuditEventType` (must include `COMPENSATION_FAILED` and `COMPENSATION_ACKNOWLEDGED`). `MetricsSummaryResponse` must include `compensationFailed: number`.
 - [ ] **3.2:** Implement the API adapter pattern: create `lib/api-adapter.ts` that checks `VITE_USE_MOCK_DATA` and routes calls to either real Axios endpoints or local mock stores. Export typed functions per endpoint (e.g., `getDefinitions()`, `getInstances()`, `getMetrics()`).
 - [ ] **3.3:** Populate mock definition store (`mocks/definitions.ts`) with all 11 seed flows from `DataInitializer` (`DEFAULT_FLOW`, `LOAN_APPROVAL`, `ORDER_FULFILLMENT`, `PARALLEL_FLOW`, `PAYMENT_SAGA`, `DELAY_FLOW`, `CREDIT_CHECK_SUB`, `SUB_PROCESS_FLOW`, `SCATTER_GATHER_FLOW`, `HTTP_STEP_FLOW`, `HUMAN_TASK_FLOW`). Include full `transitionsJson` and `compensationsJson` per flow.
-- [ ] **3.4:** Populate mock instance store (`mocks/instances.ts`) with sample `ProcessInstanceResponse` entries in various statuses (RUNNING, COMPLETED, FAILED, SUSPENDED, STALLED, CANCELLED, SCHEDULED, WAITING_FOR_CHILD). Include parent/child relationships for sub-process instances.
+- [ ] **3.4:** Populate mock instance store (`mocks/instances.ts`) with sample `ProcessInstanceResponse` entries in various statuses (RUNNING, COMPLETED, FAILED, SUSPENDED, STALLED, CANCELLED, SCHEDULED, WAITING_FOR_CHILD, COMPENSATION_FAILED). Include parent/child relationships for sub-process instances.
 - [ ] **3.5:** Populate mock human task store (`mocks/tasks.ts`) with sample `HumanTaskResponse` entries (PENDING and COMPLETED) including `formSchema` fields of varying types (string, boolean, number, select).
-- [ ] **3.6:** Create mock responses for metrics (`/api/metrics/summary`) and audit trail (`/api/processes/{id}/audit`) in `mocks/metrics.ts` and `mocks/audit.ts`.
+- [ ] **3.6:** Create mock responses for metrics (`/api/metrics/summary`) and audit trail (`/api/processes/{id}/audit`) in `mocks/metrics.ts` and `mocks/audit.ts`. Include `compensationFailed` field in mock metrics.
 
 ## Sprint 4: Dashboard Page
 - [ ] **4.1:** Write React Query hook `useMetricsSummary` calling `GET /api/metrics/summary` through the API adapter.
 - [ ] **4.2:** Write React Query hook `useRecentInstances` calling `GET /api/processes?page=0&size=10` through the API adapter.
-- [ ] **4.3:** Build Dashboard metrics cards: map each status count from `MetricsSummaryResponse` to a card with dynamic Lucide icon, color, and label. Include `successRate` as a percentage card.
+- [ ] **4.3:** Build Dashboard metrics cards: map each status count from `MetricsSummaryResponse` to a card with dynamic Lucide icon, color, and label. Include `successRate` as a percentage card. Add a `compensationFailed` card (orange/amber, `AlertTriangle` icon) that only shows when count > 0 — clicking it filters instances to `COMPENSATION_FAILED`.
 - [ ] **4.4:** Build Dashboard Activity Table showing recent process instances with columns: definition name, current step, status badge, created time.
 - [ ] **4.5:** Add "Start New Flow" button on Dashboard that opens the Start Flow modal (built in Sprint 5).
 
@@ -64,7 +66,7 @@
 - [ ] **7.2:** Build the Instances list page with data table, pagination controls, definition dropdown filter, and status filter chips.
 - [ ] **7.3:** Add a "Start New Flow" button on the Instances page that opens the same Start Flow modal from Sprint 5.
 - [ ] **7.4:** Build the Process Detail page header ribbon (`/instances/:id`): display definition name, version, process ID, and created timestamp.
-- [ ] **7.5:** Build dynamic status badge component mapping each `ProcessStatus` to a color and icon (e.g., RUNNING → blue spinner, FAILED → red X, SUSPENDED → amber pause).
+- [ ] **7.5:** Build dynamic status badge component mapping each `ProcessStatus` to a color and icon (e.g., RUNNING → blue spinner, FAILED → red X, SUSPENDED → amber pause, COMPENSATION_FAILED → orange `AlertTriangle`).
 - [ ] **7.6:** Build parent/child navigation links on the Detail page: if `parentProcessId` is set, show "Parent Process" link; query `GET /api/processes` filtered by parent to list child processes.
 - [ ] **7.7:** Add step duration display: calculate elapsed time from `stepStartedAt` to now (if RUNNING) or to `completedAt` (if terminal).
 - [ ] **7.8:** Implement auto-polling: set `refetchInterval: 3000` on `useProcessInstance(id)` when status is `RUNNING`, `SCHEDULED`, or `WAITING_FOR_CHILD`.
@@ -74,12 +76,13 @@
 ## Sprint 8: Audit Trail & Process Interventions
 - [ ] **8.1:** Write React Query hook `useAuditTrail(processId)` calling `GET /api/processes/{id}/audit`.
 - [ ] **8.2:** Build `AuditTimeline` component: vertical timeline using Tailwind CSS borders/circles, displaying each audit event with timestamp, `eventType` badge, and expandable `payload`/`contextSnapshot` JSON viewer.
-- [ ] **8.3:** Render human-task audit events (`HUMAN_TASK_CREATED`, `HUMAN_TASK_COMPLETED`, `HUMAN_TASK_CANCELLED`) with a `UserCheck` icon and task name from the audit payload.
+- [ ] **8.3:** Render human-task audit events (`HUMAN_TASK_CREATED`, `HUMAN_TASK_COMPLETED`, `HUMAN_TASK_CANCELLED`) with a `UserCheck` icon and task name from the audit payload. Render `COMPENSATION_FAILED` with a red `AlertTriangle` icon and `COMPENSATION_ACKNOWLEDGED` with a green `CheckCircle` icon.
 - [ ] **8.4:** Write mutation hook `useCancelProcess` — `POST /api/processes/{id}/cancel`, invalidates instance query, shows toast.
 - [ ] **8.5:** Write mutation hook `useRetryProcess` — `POST /api/processes/{id}/retry`, invalidates instance query, shows toast.
 - [ ] **8.6:** Write mutation hook `useAdvanceProcess` — `POST /api/processes/{id}/advance?toStep=`, invalidates instance query.
 - [ ] **8.7:** Write mutation hook `useWakeProcess` — `POST /api/processes/{id}/wake`, invalidates instance query.
-- [ ] **8.8:** Wire intervention buttons into the Detail page header ribbon: Cancel (with confirmation dialog), Retry, Advance (step input), Wake. Show/hide buttons based on current process status (e.g., Cancel only for RUNNING/SUSPENDED/WAITING_FOR_CHILD).
+- [ ] **8.8:** Wire intervention buttons into the Detail page header ribbon: Cancel (with confirmation dialog), Retry, Advance (step input), Wake. Show/hide buttons based on current process status (e.g., Cancel only for RUNNING/SUSPENDED/WAITING_FOR_CHILD/COMPENSATION_FAILED). When status is `COMPENSATION_FAILED`, show an amber banner "⚠ Compensation failed — manual DB remediation required" and an "Acknowledge & Cancel" button.
+- [ ] **8.11:** Write mutation hook `useAcknowledgeCompensationFailure(id)` — `POST /api/processes/{id}/acknowledge-compensation-failure`, invalidates instance query, shows toast "Process acknowledged and cancelled". Only render the button when status is `COMPENSATION_FAILED`.
 - [ ] **8.9:** Build the "Signal Modal": form with Event Type text input and Data JSON editor (Monaco). Submits `POST /api/processes/{id}/signal` with `{ event, data }`. Only available when status is `SUSPENDED`.
 - [ ] **8.10:** Build the "Replay / Time-Travel Modal": load audit trail, filter to `PROCESS_STARTED` and `STEP_TRANSITION` events, let user select a step, and submit `POST /api/processes/{id}/replay?fromStep=X`. Show confirmation warning.
 
@@ -101,3 +104,5 @@
 - [ ] **10.6:** Audit responsive layouts: ensure Sidebar collapses to icons on screens < 1024px, tables scroll horizontally on narrow viewports, modals/sheets are full-width on mobile.
 - [ ] **10.7:** Final QA: clear console warnings, verify all toast messages fire correctly, test dark/light mode across all pages, review accessibility (keyboard nav, aria labels on interactive elements).
 - [ ] **10.8:** Production build & deploy config: multi-environment `.env` support (`.env.production`, `.env.staging`), verify `vite build` output.
+- [ ] **10.9:** Implement role-aware UI rendering: detect `ROLE_ADMIN` vs `ROLE_VIEWER` from the decoded JWT (`jwt-decode` library). Hide all mutating buttons (Create, Edit, Delete, Cancel, Retry, Advance, Signal, Acknowledge) for VIEWER-only tokens. Show a "Read-only mode" chip in the TopBar when role is VIEWER.
+- [ ] **10.10:** Add a dev-only "Get Token" helper panel (only renders when `VITE_USE_MOCK_DATA=false` and hostname is `localhost`): two buttons "Admin Token" / "Viewer Token" that call `GET /dev/token?role=ROLE_ADMIN` / `GET /dev/token?role=ROLE_VIEWER`, store the result and refresh the page.

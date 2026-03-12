@@ -90,7 +90,7 @@ This section details exactly how the frontend must communicate with the backend 
 **List Processes**
 - **Endpoint:** `GET /api/processes?status={status}&definitionName={name}&page=0&size=20&sort=createdAt,desc`
 - **Query Parameters (all optional):**
-  - `status` — One of: `RUNNING`, `COMPLETED`, `FAILED`, `SUSPENDED`, `STALLED`, `CANCELLED`, `SCHEDULED`, `WAITING_FOR_CHILD`
+  - `status` — One of: `RUNNING`, `COMPLETED`, `FAILED`, `SUSPENDED`, `STALLED`, `CANCELLED`, `SCHEDULED`, `WAITING_FOR_CHILD`, `COMPENSATION_FAILED`
   - `definitionName` — Filter by definition name (e.g., `LOAN_APPROVAL`)
   - `page` — Zero-indexed page number (default `0`)
   - `size` — Page size (default `20`)
@@ -190,6 +190,7 @@ For all these, append to `/api/processes/{id}`.
     }
     ```
 - **Replay/Time Travel:** `POST /replay?fromStep={stepName}` - (No body) Returns `ProcessInstanceResponse`.
+- **Acknowledge Compensation Failure:** `POST /acknowledge-compensation-failure` - (No body) Transitions `COMPENSATION_FAILED → CANCELLED` after manual DB remediation. Returns `ProcessInstanceResponse`.
 
 ### 3.4. Metrics (`/api/metrics`)
 
@@ -206,6 +207,7 @@ For all these, append to `/api/processes/{id}`.
     "stalled": 1,
     "scheduled": 2,
     "waitingForChild": 0,
+    "compensationFailed": 0,
     "successRate": 85.0
   }
   ```
@@ -289,6 +291,30 @@ When `POST /api/tasks/{id}/complete` is called:
 3. The process evaluates its `transitions["APPROVAL_GRANTED"]` rules (SpEL conditions see `resultData` fields as context variables).
 
 This means `resultData` fields (e.g. `approved`, `notes`) become available as `#approved`, `#notes` in any SpEL conditions on the signal transition rules.
+
+### 3.7. Authentication (OAuth2 / JWT)
+
+All backend endpoints now require a valid JWT Bearer token. The frontend must:
+
+1. **Store the token** — after obtaining a token (dev: `GET /dev/token?role=ROLE_ADMIN`; prod: from your IdP), persist it in `localStorage` under `edoe_token`.
+2. **Attach to every request** — the Axios instance in `lib/api-client.ts` must add `Authorization: Bearer <token>` to every outgoing request.
+3. **Handle 401** — on `401 Unauthorized`, clear the stored token and redirect to a login/token-entry page.
+4. **Handle 403** — on `403 Forbidden`, show a toast: "Insufficient permissions".
+
+**Role constraints relevant to the UI:**
+
+| Role | What UI elements to show/hide |
+|---|---|
+| `ROLE_VIEWER` | Read-only views: Dashboard, Definitions list (no create/edit/delete), Instances list (no cancel/retry/advance), Audit trail, Metrics |
+| `ROLE_ADMIN` | Full access: all CRUD, cancel/retry/advance/wake/signal/replay/acknowledge buttons |
+
+**Dev token endpoint (only active with `--spring.profiles.active=dev`):**
+```
+GET /dev/token?subject=admin&role=ROLE_ADMIN
+→ { "token": "<hs256-jwt>" }
+```
+
+In the dev mock layer (`VITE_USE_MOCK_DATA=true`) authentication can be skipped entirely — all API adapter calls bypass the real backend.
 
 ## 4. UI/UX Design System & Layout Structure
 - **Aesthetics:** Sleek, modern, dashboard-centric design. Support for both Dark Mode and Light Mode with seamless switching. Use of subtle glassmorphism for floating overlays, and vibrant but professional colors (e.g., slate/zinc backgrounds with indigo/violet primary accents to signify active states).
@@ -506,7 +532,8 @@ type ProcessStatus =
   | "STALLED"
   | "CANCELLED"
   | "SCHEDULED"
-  | "WAITING_FOR_CHILD";
+  | "WAITING_FOR_CHILD"
+  | "COMPENSATION_FAILED";
 
 type AuditEventType =
   | "PROCESS_STARTED"
@@ -540,7 +567,9 @@ type AuditEventType =
   | "WEBHOOK_FAILED"
   | "HUMAN_TASK_CREATED"
   | "HUMAN_TASK_COMPLETED"
-  | "HUMAN_TASK_CANCELLED";
+  | "HUMAN_TASK_CANCELLED"
+  | "COMPENSATION_FAILED"
+  | "COMPENSATION_ACKNOWLEDGED";
 
 type HumanTaskStatus = "PENDING" | "COMPLETED" | "CANCELLED";
 
@@ -610,6 +639,7 @@ interface MetricsSummaryResponse {
   cancelled: number;
   scheduled: number;
   waitingForChild: number;
+  compensationFailed: number; // processes stuck in COMPENSATION_FAILED awaiting manual ack
   successRate: number; // 0.0 – 100.0
 }
 
@@ -800,12 +830,13 @@ During scatter-gather execution, the engine creates indexed step names: `PROCESS
 
 | Action | Valid Statuses | Notes |
 |---|---|---|
-| **Cancel** | `RUNNING`, `STALLED`, `SUSPENDED`, `SCHEDULED`, `WAITING_FOR_CHILD` | Cascades cancel to active child processes **and** auto-cancels all PENDING human tasks for this process |
+| **Cancel** | `RUNNING`, `STALLED`, `SUSPENDED`, `SCHEDULED`, `WAITING_FOR_CHILD`, `COMPENSATION_FAILED` | Cascades cancel to active child processes **and** auto-cancels all PENDING human tasks for this process |
 | **Retry** | `FAILED`, `STALLED` | Resets to initial step |
 | **Advance** | `RUNNING`, `STALLED` | Manually forces the next transition |
 | **Wake** | `SCHEDULED` only | Bypasses remaining timer delay |
 | **Signal** | `SUSPENDED` only | Injects event + data, evaluates transitions |
 | **Replay** | Any non-`COMPLETED` | Rewinds to a historical step from audit trail |
+| **Acknowledge Compensation Failure** | `COMPENSATION_FAILED` only | Marks process `CANCELLED` after operator manually fixes the DB |
 
 **Implication for the UI:** Conditionally enable/disable action buttons based on the process `status`.
 
@@ -1263,6 +1294,18 @@ const mockProcessInstances: ProcessInstanceResponse[] = [
     completedAt: null,
     contextData: "{\"error\": \"Payment declined\"}",
     parentProcessId: null
+  },
+  {
+    id: "a1b2c3d4-0001-0001-0001-000000000011",
+    definitionName: "PAYMENT_SAGA",
+    definitionVersion: 1,
+    currentStep: "REFUND_PAYMENT",
+    status: "COMPENSATION_FAILED",
+    createdAt: "2026-03-11T09:45:00",
+    stepStartedAt: "2026-03-11T09:45:30",
+    completedAt: null,
+    contextData: "{\"error\": \"Refund gateway unreachable\"}",
+    parentProcessId: null
   }
 ];
 ```
@@ -1360,7 +1403,7 @@ const mockAuditTrail: AuditLogResponse[] = [
 
 ```typescript
 const mockMetrics: MetricsSummaryResponse = {
-  total: 150,
+  total: 151,
   running: 12,
   completed: 118,
   failed: 5,
@@ -1368,7 +1411,8 @@ const mockMetrics: MetricsSummaryResponse = {
   cancelled: 8,
   scheduled: 3,
   waitingForChild: 2,
-  successRate: 78.67
+  compensationFailed: 1,
+  successRate: 78.15
 };
 ```
 
@@ -1534,5 +1578,6 @@ When viewing a running process instance in the detail view:
 | Failed step | Red border / red fill |
 | `PARALLEL_WAIT` / `MULTI_INSTANCE_WAIT` | Highlight ALL parallel/MI branch nodes as "in progress" |
 | Compensation steps (if `compensating = true`) | Red dashed pulse on active compensation node |
+| `COMPENSATION_FAILED` status | Red border on current compensation step + amber banner: "Compensation failed — operator action required" |
 
 To determine which steps are completed, use the audit trail: filter for `STEP_TRANSITION` events and collect all `stepName` values — those are the steps that were successfully entered.
